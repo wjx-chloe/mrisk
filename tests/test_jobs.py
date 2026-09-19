@@ -47,6 +47,8 @@ class FakeSource:
         out = pd.DataFrame({"trade_date": CAL[m], "close": self.px[(exchange, symbol)][m], "volume": 1000})
         if symbol == "600003":  # suspended one day
             out = out[out["trade_date"] != pd.Timestamp("2025-05-14")]
+        if symbol == "600004":  # suspended across price_start (2025-03-10)
+            out = out[(out["trade_date"] < pd.Timestamp("2025-03-06")) | (out["trade_date"] > pd.Timestamp("2025-03-11"))]
         return out.reset_index(drop=True)
 
     def hfq_factor(self, exchange, symbol):
@@ -57,7 +59,7 @@ class FakeSource:
 def env(tmp_path, monkeypatch):
     cfg = load_config("config.yaml")
     cfg["_root"] = tmp_path
-    cfg["data"]["price_start"] = "2025-03-03"
+    cfg["data"]["price_start"] = "2025-03-10"
     cfg["portfolio"].update(start="2025-04-01", n_holdings=6, min_industries=3, initial_capital=1e7)
     cfg["universe"].update(industries=INDS, per_industry=3, listed_before="2015-01-01")
     seed = tmp_path / "seed"
@@ -90,6 +92,12 @@ def test_backfill_then_daily(env, monkeypatch):
     px = read_frame(engine, s.daily_price)
     susp = px[(px["instrument_id"] == "SH600003") & (px["trade_date"] == pd.Timestamp("2025-05-14"))]
     assert susp["is_suspended"].tolist() == [True]
+    lead = px[(px["instrument_id"] == "SH600004") & (px["trade_date"] <= pd.Timestamp("2025-03-11"))]
+    assert lead["trade_date"].min() == pd.Timestamp("2025-03-10")
+    assert lead["is_suspended"].all() and len(lead) == 2
+    src = etl.make_source(cfg)
+    last_real = src.px[("SH", "600004")][CAL.get_loc(pd.Timestamp("2025-03-05"))]
+    assert (lead["close"] == last_real).all()
 
     feed = pd.read_csv(etl.feed_path(cfg), dtype={"symbol": str}, parse_dates=["trade_date"])
     bj = feed[feed["exchange"] == "BJ"]

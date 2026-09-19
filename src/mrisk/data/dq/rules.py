@@ -69,8 +69,12 @@ def dq04_within_price_limit(ctx: DQContext) -> RuleOutput:
     ].copy()
     limit = price_limit(px["board"], px["name"].str.contains("ST", na=False), px["trade_date"])
     # reference price on ex-dates: previous close restated in today's adjustment basis
-    ref = px["prev_adj_close"] / (px["adj_close"] / px["close"])
-    tol = np.maximum(p["price_limit_tolerance_pct"] * ref, p["price_limit_tolerance_abs"])
+    factor = px["adj_close"] / px["close"]
+    ref = px["prev_adj_close"] / factor
+    # on ex-dates the factor-implied reference only approximates the exchange's ex-rights price (rights issues)
+    is_ex = (factor / (px["prev_adj_close"] / px["prev_close"]) - 1).abs() > 1e-9
+    pct = np.where(is_ex, p["price_limit_tolerance_pct_exdate"], p["price_limit_tolerance_pct"])
+    tol = np.maximum(pct * ref, p["price_limit_tolerance_abs"])
     ok = (px["close"] <= ref * (1 + limit) + tol) & (px["close"] >= ref * (1 - limit) - tol)
     px["ret"] = px["adj_close"] / px["prev_adj_close"] - 1
     px["limit"] = limit
@@ -158,7 +162,7 @@ RULES: list[RuleSpec] = [
     RuleSpec("DQ03", "收盘价大于 0", "准确性", "close > 0 且 adj_close > 0", dq03_close_positive),
     RuleSpec(
         "DQ04", "涨跌幅在涨跌停限制内", "准确性",
-        "主板±10%、创业板±20%(2020-08-24前±10%)、科创板±20%、北交所±30%、主板ST±5%；上市前5日豁免；容差 max(0.1%, 0.01元)",
+        "主板±10%、创业板±20%(2020-08-24前±10%)、科创板±20%、北交所±30%、主板ST±5%；上市前5日豁免；容差 max(0.1%, 0.01元)，除权日 max(0.5%, 0.01元)",
         dq04_within_price_limit,
     ),
     RuleSpec("DQ05", "复权因子单调", "准确性", "后复权因子 adj_close/close 随时间单调不减", dq05_adj_factor_monotone),

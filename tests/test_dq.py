@@ -8,7 +8,8 @@ D = pd.to_datetime
 DAYS = D(["2025-04-28", "2025-04-29", "2025-04-30", "2025-05-06", "2025-05-07"])
 PARAMS = dict(
     arrival_deadline="17:00", mv_change_max=0.30, row_count_change_max=0.05,
-    price_limit_tolerance_pct=0.001, price_limit_tolerance_abs=0.01, new_listing_exempt_days=5,
+    price_limit_tolerance_pct=0.001, price_limit_tolerance_pct_exdate=0.005, price_limit_tolerance_abs=0.01,
+    new_listing_exempt_days=5,
 )
 IDS = ["SH600000", "SZ300059", "BJ920682"]
 
@@ -131,6 +132,11 @@ def _two_day_prices(closes, factors, board="main", name="X"):
         ([10.00, 7.10], [1, 1], "bj", "X", False),        # BJ -29%
         ([10.00, 10.00], [1, 1.1], "main", "X", False),   # ex-date: ref 9.0909, upper 10.0
         ([10.00, 10.50], [1, 1.1], "main", "X", True),    # +5% raw but +15.5% vs ex-ref
+        # 000977 2017-07-27 rights issue: ref 16.54*5.52708/6.05047=15.1093, upper 16.6202,
+        # ex-date tol 0.5% -> 16.6957 >= 16.67 (exchange ref 15.15 -> limit-up 16.67)
+        ([16.54, 16.67], [5.5270847836806, 6.0504723051981], "main", "X", False),
+        ([16.54, 16.67], [1, 1], "main", "X", False),     # same prices, no ex-date: +0.8%
+        ([10.00, 11.03], [1, 1], "main", "X", True),      # normal day keeps the 0.1% tolerance
     ],
 )
 def test_dq04_hand_cases(closes, factors, board, name, expect_fail):

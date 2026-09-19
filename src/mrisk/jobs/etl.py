@@ -77,12 +77,11 @@ def apply_code_map(engine: Engine) -> int:
 
 
 def fetch_prices(engine: Engine, src: AkshareSource, start, end, load_type: str) -> int:
-    """Writes daily_price rows in [start, end]. A few earlier trading days are pulled as context so
-    suspensions at the start of the window can be carried forward, but are not rewritten."""
+    """Writes daily_price rows in [start, end]. The full earlier history is used as context (Sina returns
+    it in the same request) so a suspension spanning the window start carries the last real close."""
     start, end = pd.Timestamp(start), pd.Timestamp(end)
     cal = trading_days(engine)
-    before = cal[cal < start]
-    ctx_start = before[-PRICE_CONTEXT_DAYS] if len(before) >= PRICE_CONTEXT_DAYS else start
+    ctx_start = cal[0]
     inst = read_frame(engine, s.instrument, date_col="list_date")
     daily, factors = [], []
     for i, row in enumerate(inst.itertuples(), 1):
