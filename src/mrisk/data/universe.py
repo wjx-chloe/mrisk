@@ -36,13 +36,25 @@ def select_universe(
 
 
 def build_instruments(
-    universe: pd.DataFrame, listings: pd.DataFrame, sw_members: pd.DataFrame, delisted: pd.DataFrame
+    universe: pd.DataFrame,
+    listings: pd.DataFrame,
+    sw_members: pd.DataFrame,
+    delisted: pd.DataFrame,
+    industry_override: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """-> instrument table rows. Every universe member must have a listing and an SW L1 industry."""
+    """-> instrument table rows. Every universe member must have a listing and an SW L1 industry.
+    industry_override[instrument_id, industry_l1] only fills names SW index constituents do not cover
+    (they exclude the Beijing exchange); overriding a covered name raises so stale overrides surface."""
     u = universe[["instrument_id", "exchange", "symbol"]]
     m = u.merge(listings[["exchange", "symbol", "name", "list_date"]], on=["exchange", "symbol"], how="left")
-    ind = sw_members.drop_duplicates("symbol")[["symbol", "industry_l1"]]
-    m = m.merge(ind, on="symbol", how="left")
+    m = m.merge(sw_members.drop_duplicates("symbol")[["symbol", "industry_l1"]], on="symbol", how="left")
+    if industry_override is not None and not industry_override.empty:
+        ov = industry_override.set_index("instrument_id")["industry_l1"]
+        clash = m["instrument_id"].isin(ov.index) & m["industry_l1"].notna()
+        if clash.any():
+            raise ValueError(f"industry override for SW-covered names: {m.loc[clash, 'instrument_id'].tolist()}")
+        fill = m["industry_l1"].isna()
+        m.loc[fill, "industry_l1"] = m.loc[fill, "instrument_id"].map(ov)
     for col in ("name", "industry_l1"):
         if m[col].isna().any():
             raise ValueError(f"{col} missing for {m.loc[m[col].isna(), 'instrument_id'].tolist()}")

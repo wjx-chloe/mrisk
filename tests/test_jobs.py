@@ -65,6 +65,7 @@ def env(tmp_path, monkeypatch):
     (seed / "code_map.csv").write_text(
         "instrument_id,old_symbol,new_symbol,effective_date\nBJ920682,834682,920682,2025-05-06\n", encoding="utf-8"
     )
+    (seed / "industry_override.csv").write_text("instrument_id,industry_l1,note\n", encoding="utf-8")
     monkeypatch.setattr(etl, "SEED_DIR", seed)
     src = FakeSource()
     monkeypatch.setattr(etl, "make_source", lambda cfg: src)

@@ -42,6 +42,16 @@ def test_build_instruments():
     assert inst["industry_l1"].tolist() == ["银行", "电力设备"]
 
 
+def test_industry_override_fills_only_uncovered_names():
+    u = pd.DataFrame({"instrument_id": ["SH600000", "BJ920682"], "exchange": ["SH", "BJ"], "symbol": ["600000", "920682"]})
+    sw = SW[SW["symbol"] != "920682"]
+    ov = pd.DataFrame({"instrument_id": ["BJ920682"], "industry_l1": ["电力设备"]})
+    inst = build_instruments(u, LISTINGS, sw, LISTINGS.iloc[:0], ov)
+    assert inst["industry_l1"].tolist() == ["银行", "电力设备"]
+    with pytest.raises(ValueError):
+        build_instruments(u, LISTINGS, sw, LISTINGS.iloc[:0], pd.DataFrame({"instrument_id": ["SH600000"], "industry_l1": ["电子"]}))
+
+
 def test_build_instruments_missing_industry_raises():
     u = pd.DataFrame({"instrument_id": ["SH600000"], "exchange": ["SH"], "symbol": ["600000"]})
     with pytest.raises(ValueError):

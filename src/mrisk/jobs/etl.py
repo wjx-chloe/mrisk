@@ -65,7 +65,10 @@ def fetch_trade_calendar(engine: Engine, src: AkshareSource) -> int:
 
 
 def fetch_instruments(engine: Engine, src: AkshareSource) -> int:
-    inst = build_instruments(load_seed("universe.csv"), src.listings(), src.sw_l1_members(), src.delisted())
+    inst = build_instruments(
+        load_seed("universe.csv"), src.listings(), src.sw_l1_members(), src.delisted(),
+        load_seed("industry_override.csv")[["instrument_id", "industry_l1"]],
+    )
     return upsert(engine, s.instrument, inst)
 
 
