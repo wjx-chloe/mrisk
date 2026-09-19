@@ -76,6 +76,7 @@
 | symbol | text | 交易所代码，6 位 |
 | name | text | 股票简称 |
 | industry_l1 | text | 一级行业（申万或中信，⚠️ 默认申万） |
+| board | text | main（主板）/ chinext（创业板）/ star（科创板）/ bj（北交所），由代码推断，DQ04 涨跌幅限制用 |
 | list_date | date | 上市日 |
 | status | text | active / delisted |
 
@@ -155,12 +156,40 @@
 ### 3.9 dq_rule / dq_result — 数据质量规则与结果
 规则用 SQL 或 Python 表达式描述，结果记录每日每条规则的通过/失败及失败明细。
 
+dq_rule：
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| rule_id | text PK | DQ01…DQ12 |
+| name | text | |
+| category | text | 完整性 / 准确性 / 一致性 / 及时性 / 合理性 |
+| severity | text | blocking / warn |
+| description | text | |
+| is_active | bool | |
+
+dq_result：主键 (run_id, check_date, rule_id)
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| run_id | text | 本次校验批次 |
+| check_date | date | 被校验的交易日 |
+| rule_id | text FK | |
+| status | text | pass / fail / skip（当日无可检查对象） |
+| n_checked | integer | 检查条数 |
+| n_failed | integer | 失败条数 |
+| detail_json | jsonb | 失败明细样本（最多 20 条） |
+| created_at | timestamp | |
+
 ### 3.10 scenario — 压力测试情景
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | scenario_id | text PK | |
 | type | text | historical / hypothetical |
 | definition | jsonb | historical: {start, end}；hypothetical: {market: -0.05} 或 {industry: {银行: -0.10}} |
+
+### 3.11 trade_calendar — 交易日历
+DQ01 对照、停牌补行、调度判断是否交易日都以此为准。
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| trade_date | date PK | 交易日 |
 
 ---
 
