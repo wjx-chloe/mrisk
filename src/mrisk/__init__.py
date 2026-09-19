@@ -1,2 +1,6 @@
 def main() -> None:
-    print("Hello from mrisk!")
+    import sys
+
+    from mrisk.cli import main as cli_main
+
+    sys.exit(cli_main())

@@ -16,6 +16,15 @@ data:
   bypass_proxy: true
   request_interval_sec: 1.0
   max_retries: 4
+  # mock 上游持仓系统的落地文件目录
+  position_feed_dir: data/feed
+
+universe:
+  industries: [银行, 非银金融, 食品饮料, 医药生物, 电子, 电力设备, 有色金属, 计算机]
+  per_industry: 10
+  listed_before: 2015-01-01
+  # 经历过 920 号段切换的北交所股票（834682 -> 920682，2025-05-06 生效）
+  must_include: [BJ920682]
 
 portfolio:
   portfolio_id: P001
