@@ -1,0 +1,20 @@
+[project]
+name = "mrisk"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "akshare>=1.18.96",
+    "numpy>=2.4.6",
+    "pandas>=3.0.6",
+    "pytest>=9.1.1",
+    "scipy>=1.17.1",
+]
+
+[project.scripts]
+mrisk = "mrisk:main"
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13.0"]
+build-backend = "uv_build"
