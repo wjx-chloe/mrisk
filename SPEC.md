@@ -115,16 +115,18 @@
 | cost_price | numeric | 成本价（可选） |
 
 ### 3.6 risk_result — 每日风险指标结果
+长表：每个置信度各存一行，主键 (trade_date, portfolio_id, level, level_key, confidence)。
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | trade_date | date | |
 | portfolio_id | text | |
 | level | text | portfolio / industry / instrument |
 | level_key | text | 层级键，组合级为 portfolio_id，行业级为行业名，个股级为 instrument_id |
+| confidence | numeric | 置信度，0.95 / 0.99 |
 | market_value | numeric | |
-| var_hs_99 | numeric | 历史模拟法 VaR，99%，1 日 |
-| var_param_99 | numeric | 参数法 VaR |
-| es_hs_99 | numeric | 历史模拟法 ES |
+| var_hs | numeric | 历史模拟法 VaR，1 日，置信度见 confidence |
+| var_param | numeric | 参数法 VaR |
+| es_hs | numeric | 历史模拟法 ES |
 | pnl_actual | numeric | 当日实际损益（次日回填） |
 | run_id | text | 本次计算批次 |
 
@@ -234,7 +236,7 @@ parametric_dist: normal   # normal / t（t 为进阶）
 
 ### 5.4 回测
 每日用"昨天算的 VaR"对比"今天实际 P&L"：
-- **例外**：`pnl_actual < −var_hs_99`
+- **例外**：`pnl_actual < −var_hs`（取 confidence = 0.99 的行）
 - **Kupiec POF 检验**：
   - 样本 T 天，例外数 x，期望超越率 p = 1 − confidence
   - `LR = −2 ln[(1−p)^(T−x) p^x] + 2 ln[(1−x/T)^(T−x) (x/T)^x]`
