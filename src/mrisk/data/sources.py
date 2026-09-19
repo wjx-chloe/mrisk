@@ -19,12 +19,17 @@ import pandas as pd
 log = logging.getLogger(__name__)
 
 
+def to_ns(s: pd.Series) -> pd.Series:
+    """pandas 3 infers s/us resolutions per parse; merge_asof requires identical ones."""
+    return pd.to_datetime(s, errors="coerce").astype("datetime64[ns]")
+
+
 def clean_name(name: str) -> str:
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(name)))
 
 
 def norm_trade_calendar(raw: pd.DataFrame) -> pd.DataFrame:
-    return pd.DataFrame({"trade_date": pd.to_datetime(raw["trade_date"])}).sort_values("trade_date", ignore_index=True)
+    return pd.DataFrame({"trade_date": to_ns(raw["trade_date"])}).sort_values("trade_date", ignore_index=True)
 
 
 def norm_listings(sh_main: pd.DataFrame, sh_star: pd.DataFrame, sz: pd.DataFrame, bj: pd.DataFrame) -> pd.DataFrame:
@@ -37,7 +42,7 @@ def norm_listings(sh_main: pd.DataFrame, sh_star: pd.DataFrame, sz: pd.DataFrame
     out = pd.concat(parts, ignore_index=True)
     out["symbol"] = out["symbol"].astype(str).str.zfill(6)
     out["name"] = out["name"].map(clean_name)
-    out["list_date"] = pd.to_datetime(out["list_date"], errors="coerce")
+    out["list_date"] = to_ns(out["list_date"])
     return out
 
 
@@ -65,7 +70,7 @@ def norm_sw_members(components: dict[str, pd.DataFrame]) -> pd.DataFrame:
 def norm_daily(raw: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "trade_date": pd.to_datetime(raw["date"]),
+            "trade_date": to_ns(raw["date"]),
             "close": pd.to_numeric(raw["close"]).astype(float),
             "volume": pd.to_numeric(raw["volume"]).astype("int64"),
         }
@@ -74,7 +79,7 @@ def norm_daily(raw: pd.DataFrame) -> pd.DataFrame:
 
 def norm_hfq_factor(raw: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame(
-        {"effective_date": pd.to_datetime(raw["date"]), "hfq_factor": pd.to_numeric(raw["hfq_factor"]).astype(float)}
+        {"effective_date": to_ns(raw["date"]), "hfq_factor": pd.to_numeric(raw["hfq_factor"]).astype(float)}
     )
     return out.sort_values("effective_date", ignore_index=True)
 

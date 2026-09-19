@@ -101,5 +101,5 @@ def read_frame(
         df = pd.read_sql(stmt, conn)
     for col in df.columns:
         if isinstance(table.columns[col].type, (Date, DateTime)):
-            df[col] = pd.to_datetime(df[col])
+            df[col] = pd.to_datetime(df[col]).astype("datetime64[ns]")
     return df

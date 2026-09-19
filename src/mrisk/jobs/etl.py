@@ -41,7 +41,7 @@ def make_source(cfg) -> AkshareSource:
 def load_seed(name: str) -> pd.DataFrame:
     df = pd.read_csv(SEED_DIR / name, dtype=str)
     if "effective_date" in df:
-        df["effective_date"] = pd.to_datetime(df["effective_date"])
+        df["effective_date"] = pd.to_datetime(df["effective_date"]).astype("datetime64[ns]")
     return df
 
 

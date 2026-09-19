@@ -27,8 +27,8 @@ def instrument_id(exchange: pd.Series, symbol: pd.Series) -> pd.Series:
 def apply_hfq(daily: pd.DataFrame, factors: pd.DataFrame) -> pd.DataFrame:
     """daily[instrument_id, trade_date, close, ...] + factors[instrument_id, effective_date, hfq_factor]
     -> adds adj_close = close * factor in force on trade_date."""
-    d = daily.sort_values("trade_date")
-    f = factors.sort_values("effective_date")
+    d = daily.assign(trade_date=daily["trade_date"].astype("datetime64[ns]")).sort_values("trade_date")
+    f = factors.assign(effective_date=factors["effective_date"].astype("datetime64[ns]")).sort_values("effective_date")
     out = pd.merge_asof(
         d, f, left_on="trade_date", right_on="effective_date", by="instrument_id", direction="backward"
     )

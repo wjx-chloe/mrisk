@@ -29,6 +29,16 @@ def test_apply_hfq_uses_factor_in_force_hand_computed():
     assert out["adj_close"].tolist() == pytest.approx([10.0, 9.975, 10.08])
 
 
+def test_apply_hfq_tolerates_mixed_datetime_resolutions():
+    daily = pd.DataFrame(
+        {"instrument_id": ["A"], "trade_date": D(["2025-01-02"]).astype("datetime64[us]"), "close": [2.0], "volume": [1]}
+    )
+    factors = pd.DataFrame(
+        {"instrument_id": ["A"], "effective_date": D(["1900-01-01"]).astype("datetime64[s]"), "hfq_factor": [1.5]}
+    )
+    assert apply_hfq(daily, factors)["adj_close"].tolist() == [3.0]
+
+
 def test_apply_hfq_missing_factor_raises():
     daily = pd.DataFrame({"instrument_id": ["A"], "trade_date": D(["2025-01-02"]), "close": [1.0], "volume": [1]})
     factors = pd.DataFrame({"instrument_id": ["A"], "effective_date": D(["2025-06-01"]), "hfq_factor": [1.0]})
