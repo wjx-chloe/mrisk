@@ -1,0 +1,15 @@
+from mrisk.config import database_url, load_config
+
+
+def test_repo_config_loads_both_confidence_levels():
+    cfg = load_config("config.yaml")
+    assert cfg["confidence"] == [0.95, 0.99]
+    assert cfg["lookback_days"] == 250
+
+
+def test_sqlite_path_resolved_relative_to_config(tmp_path):
+    p = tmp_path / "c.yaml"
+    p.write_text("database:\n  url: sqlite:///sub/x.db\n", encoding="utf-8")
+    url = database_url(load_config(p))
+    assert url == "sqlite:///" + (tmp_path / "sub" / "x.db").as_posix()
+    assert (tmp_path / "sub").is_dir()

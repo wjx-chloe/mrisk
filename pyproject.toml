@@ -6,10 +6,13 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "akshare>=1.18.96",
+    "apscheduler>=3.11.3",
     "numpy>=2.4.6",
     "pandas>=3.0.6",
-    "pytest>=9.1.1",
+    "pyarrow>=25.0.1",
+    "pyyaml>=6.0.3",
     "scipy>=1.17.1",
+    "sqlalchemy>=2.0.54",
 ]
 
 [project.scripts]
@@ -18,3 +21,13 @@ mrisk = "mrisk:main"
 [build-system]
 requires = ["uv_build>=0.12.17,<0.13.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["network: hits akshare over the network (deselected by default)"]
+addopts = "-m 'not network'"

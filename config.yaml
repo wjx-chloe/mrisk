@@ -1,0 +1,39 @@
+# 计量参数（SPEC §5.1；confidence 按 CLAUDE.md 决策 3 为列表）
+confidence: [0.95, 0.99]
+holding_period_days: 1
+lookback_days: 250
+return_type: log
+parametric_dist: normal
+
+database:
+  url: sqlite:///data/mrisk.db
+
+data:
+  # 行情从 2015 年起拉，覆盖 VaR 回望窗口、回测窗口和 2015/2018/2020 压力情景
+  price_start: 2015-01-01
+  raw_cache_dir: data/raw
+  request_interval_sec: 1.0
+  max_retries: 4
+
+portfolio:
+  portfolio_id: P001
+  name: 模拟A股组合
+  start: 2024-09-02
+  initial_capital: 100000000
+  n_holdings: 40
+  min_industries: 5
+  rebalance_weight_change: 0.10
+  swap_probability: 0.25
+  seed: 20240902
+
+scheduler:
+  daily_time: "16:30"
+
+dq:
+  blocking: [DQ02, DQ03, DQ07, DQ08, DQ09, DQ11]
+  arrival_deadline: "17:00"
+  mv_change_max: 0.30
+  row_count_change_max: 0.05
+  price_limit_tolerance_pct: 0.001
+  price_limit_tolerance_abs: 0.01
+  new_listing_exempt_days: 5
