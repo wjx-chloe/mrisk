@@ -86,6 +86,15 @@ def test_must_include_held_throughout(pos):
     assert (pos.groupby("trade_date")["instrument_id"].apply(lambda s: SPLIT_ID in set(s))).all()
 
 
+def test_positions_extend_over_days_without_quotes():
+    px = _prices()
+    px = px[px["trade_date"] < DAYS[-2]]
+    pos = generate_positions(_pool(), px, pd.Series(DAYS), _params(), must_include=[SPLIT_ID])
+    wide = pos.pivot(index="trade_date", columns="instrument_id", values="quantity")
+    assert wide.index[-1] == DAYS[-1]
+    pd.testing.assert_series_equal(wide.loc[DAYS[-1]], wide.loc[DAYS[-3]], check_names=False)
+
+
 def test_too_few_industries_raises():
     with pytest.raises(ValueError):
         generate_positions(_pool(), _prices(), pd.Series(DAYS), _params(min_industries=5))

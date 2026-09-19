@@ -64,10 +64,10 @@ def generate_positions(
     days = pd.DatetimeIndex(pd.to_datetime(calendar)).sort_values()
     days = days[days >= params.start]
     px = prices[prices["trade_date"].isin(days)].copy()
-    days = days[days <= px["trade_date"].max()]
     px["factor"] = px["adj_close"] / px["close"]
-    close = px.pivot(index="trade_date", columns="instrument_id", values="close").reindex(days)
-    factor = px.pivot(index="trade_date", columns="instrument_id", values="factor").reindex(days)
+    # upstream positions exist on every trading day even when quotes are missing: carry prices, no trades
+    close = px.pivot(index="trade_date", columns="instrument_id", values="close").reindex(days).ffill()
+    factor = px.pivot(index="trade_date", columns="instrument_id", values="factor").reindex(days).ffill()
     tradable = px[~px["is_suspended"]].pivot(index="trade_date", columns="instrument_id", values="close").reindex(days).notna()
     industry = pool.set_index("instrument_id")["industry_l1"]
 
