@@ -32,7 +32,7 @@ def _to_records(table: Table, df: pd.DataFrame) -> list[dict]:
     for col in out.columns:
         ctype = table.columns[col].type
         if isinstance(ctype, DateTime):
-            out[col] = pd.to_datetime(out[col]).dt.to_pydatetime()
+            out[col] = [d.to_pydatetime() if pd.notna(d) else None for d in pd.to_datetime(out[col])]
         elif isinstance(ctype, Date):
             out[col] = [d.date() if pd.notna(d) else None for d in pd.to_datetime(out[col])]
     out = out.astype(object).where(pd.notna(out), None)

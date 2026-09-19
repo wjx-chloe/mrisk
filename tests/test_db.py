@@ -61,6 +61,15 @@ def test_upsert_roundtrip_and_idempotent(engine):
     assert df["trade_date"].dt.year.tolist() == [2025, 2025]
 
 
+def test_upsert_with_non_default_index_keeps_datetimes_aligned(engine):
+    upsert(engine, s.instrument, _instrument())
+    df = _prices([10.0, 10.5])
+    df.index = [7, 3]
+    upsert(engine, s.daily_price, df)
+    got = read_frame(engine, s.daily_price)
+    assert got["ingested_at"].tolist() == pd.to_datetime(["2025-01-02 16:31", "2025-01-03 16:31"]).tolist()
+
+
 def test_upsert_updates_on_conflict(engine):
     upsert(engine, s.instrument, _instrument())
     upsert(engine, s.daily_price, _prices([10.0, 10.5]))
