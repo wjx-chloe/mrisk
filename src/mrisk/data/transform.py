@@ -49,7 +49,8 @@ def drop_before_listing(daily: pd.DataFrame, list_dates: pd.DataFrame) -> pd.Dat
 def fill_suspended(daily: pd.DataFrame, calendar: pd.Series) -> pd.DataFrame:
     """Insert a row for every trading day strictly between an instrument's first and last observed
     dates that has no quote: close/adj_close carried forward, volume 0, is_suspended True.
-    Gaps before the first or after the last observation are left for DQ01 to report."""
+    Gaps before the first observation are left for DQ01; trailing gaps are handled by
+    infer_trailing_suspensions."""
     cal = pd.DatetimeIndex(pd.to_datetime(calendar)).sort_values()
     bounds = daily.groupby("instrument_id")["trade_date"].agg(["min", "max"])
     lo = np.searchsorted(cal.values, bounds["min"].values, side="left")
@@ -67,11 +68,52 @@ def fill_suspended(daily: pd.DataFrame, calendar: pd.Series) -> pd.DataFrame:
     return out
 
 
+PRICE_COLS = ["trade_date", "instrument_id", "close", "adj_close", "volume", "is_suspended"]
+
+
+def infer_trailing_suspensions(
+    px: pd.DataFrame, observed: pd.DataFrame, calendar: pd.Series, end: pd.Timestamp,
+    active_ids: set[str], min_coverage: float,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Sina returns no row for a suspended day, so a series that stops before `end` is read as a suspension:
+    append carried-forward suspended rows for each following trading day, but only while that day's quote
+    coverage (instruments with a real quote / instruments already started) is >= min_coverage, stopping at
+    the first day below it, so an unpublished or failed pull is never mistaken for market-wide suspension.
+    -> (px with inferred rows, inferred rows)."""
+    end = pd.Timestamp(end)
+    last = px.sort_values(["instrument_id", "trade_date"]).groupby("instrument_id").tail(1)
+    last = last[last["instrument_id"].isin(active_ids) & (last["trade_date"] < end)]
+    if last.empty:
+        return px, px.iloc[:0][PRICE_COLS]
+    cal = pd.DatetimeIndex(pd.to_datetime(calendar)).sort_values()
+    days = cal[(cal > last["trade_date"].min()) & (cal <= end)]
+    first = np.sort(px.groupby("instrument_id")["trade_date"].min().to_numpy())
+    started = np.searchsorted(first, days.to_numpy(), side="right")
+    n_obs = observed.drop_duplicates(["instrument_id", "trade_date"])["trade_date"].value_counts().reindex(days, fill_value=0)
+    ok = n_obs.to_numpy() >= min_coverage * np.maximum(started, 1)
+
+    grid = last[["instrument_id", "trade_date", "close", "adj_close"]].rename(columns={"trade_date": "last"}).merge(
+        pd.DataFrame({"trade_date": days, "ok": ok.astype(int)}), how="cross"
+    )
+    grid = grid[grid["trade_date"] > grid["last"]].sort_values(["instrument_id", "trade_date"])
+    grid = grid[grid.groupby("instrument_id")["ok"].cummin().astype(bool)]
+    inferred = grid.assign(volume=0, is_suspended=True)[PRICE_COLS].reset_index(drop=True)
+    inferred["volume"] = inferred["volume"].astype("int64")
+    return pd.concat([px[PRICE_COLS], inferred], ignore_index=True), inferred
+
+
 def build_daily_price(
-    daily: pd.DataFrame, factors: pd.DataFrame, list_dates: pd.DataFrame, calendar: pd.Series
-) -> pd.DataFrame:
-    """daily[instrument_id, trade_date, close, volume] -> daily_price columns (without ingest metadata)."""
-    px = drop_before_listing(daily, list_dates)
+    daily: pd.DataFrame, factors: pd.DataFrame, instruments: pd.DataFrame, calendar: pd.Series,
+    end: pd.Timestamp | None = None, min_coverage: float | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """daily[instrument_id, trade_date, close, volume] + instruments[instrument_id, list_date, status]
+    -> (daily_price columns without ingest metadata, rows inferred as trailing suspensions).
+    Trailing inference runs only when `end` is given."""
+    px = drop_before_listing(daily, instruments)
     px = apply_hfq(px, factors)
-    px = fill_suspended(px, calendar)
-    return px[["trade_date", "instrument_id", "close", "adj_close", "volume", "is_suspended"]]
+    observed = px[["instrument_id", "trade_date"]]
+    px = fill_suspended(px, calendar)[PRICE_COLS]
+    if end is None:
+        return px, px.iloc[:0]
+    active = set(instruments.loc[instruments["status"] == "active", "instrument_id"])
+    return infer_trailing_suspensions(px, observed, calendar, end, active, min_coverage)

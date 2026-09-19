@@ -16,6 +16,8 @@ data:
   bypass_proxy: true
   request_interval_sec: 1.0
   max_retries: 4
+  # 序列末尾缺行推断为停牌的前提：当日已有真实行情的股票占比不低于此值（防止整批未发布被误标停牌）
+  suspension_infer_min_coverage: 0.8
   # mock 上游持仓系统的落地文件目录
   position_feed_dir: data/feed
 

@@ -20,6 +20,7 @@ BJ = ("BJ", "920682")
 
 class FakeSource:
     def __init__(self):
+        self.no_quote: set[tuple[str, pd.Timestamp]] = set()
         rng = np.random.default_rng(1)
         self.px = {}
         for ex, sym in SYMS + [BJ]:
@@ -49,6 +50,8 @@ class FakeSource:
             out = out[out["trade_date"] != pd.Timestamp("2025-05-14")]
         if symbol == "600004":  # suspended across price_start (2025-03-10)
             out = out[(out["trade_date"] < pd.Timestamp("2025-03-06")) | (out["trade_date"] > pd.Timestamp("2025-03-11"))]
+        drop = [d for s, d in self.no_quote if s in (symbol, "*")]
+        out = out[~out["trade_date"].isin(drop)]
         return out.reset_index(drop=True)
 
     def hfq_factor(self, exchange, symbol):
@@ -114,6 +117,35 @@ def test_backfill_then_daily(env, monkeypatch):
     assert read_frame(engine, s.daily_price, end="2025-06-27")["load_type"].eq("backfill").all()
     last = read_frame(engine, s.dq_result, start="2025-06-30", date_col="check_date")
     assert last.set_index("rule_id").loc["DQ10", "status"] == "pass"
+
+
+def test_daily_infers_suspension_for_held_stock_without_quote(env, monkeypatch):
+    engine, cfg = env
+    jobs.backfill(engine, cfg, end=LAST_BACKFILL)
+    held = read_frame(engine, s.position, start=LAST_BACKFILL)["instrument_id"].iloc[0]
+    src = etl.make_source(cfg)
+    src.no_quote.add((held[2:], pd.Timestamp("2025-06-30")))
+    monkeypatch.setattr(etl, "now_cst", lambda: dt.datetime(2025, 6, 30, 16, 31))
+    assert len(jobs.daily(engine, cfg, "2025-06-30")) == 0
+    row = read_frame(engine, s.daily_price, start="2025-06-30", instrument_id=held)
+    prev = read_frame(engine, s.daily_price, start=LAST_BACKFILL, end=LAST_BACKFILL, instrument_id=held)
+    assert row["is_suspended"].tolist() == [True]
+    assert row["close"].tolist() == prev["close"].tolist()
+    res = read_frame(engine, s.dq_result, start="2025-06-30", date_col="check_date")
+    assert set(res["status"]) <= {"pass", "skip"}
+
+
+def test_daily_does_not_infer_when_whole_day_missing(env, monkeypatch):
+    engine, cfg = env
+    jobs.backfill(engine, cfg, end=LAST_BACKFILL)
+    etl.make_source(cfg).no_quote.add(("*", pd.Timestamp("2025-06-30")))
+    monkeypatch.setattr(etl, "now_cst", lambda: dt.datetime(2025, 6, 30, 16, 31))
+    blocked = jobs.daily(engine, cfg, "2025-06-30")
+    assert blocked.tolist() == [pd.Timestamp("2025-06-30")]
+    assert read_frame(engine, s.daily_price, start="2025-06-30").empty
+    assert len(read_frame(engine, s.position, start="2025-06-30")) == 6
+    res = read_frame(engine, s.dq_result, start="2025-06-30", date_col="check_date").set_index("rule_id")["status"]
+    assert res["DQ01"] == "fail" and res["DQ02"] == "fail"
 
 
 def test_daily_skips_non_trading_day(env):

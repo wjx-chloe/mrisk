@@ -76,9 +76,10 @@ def apply_code_map(engine: Engine) -> int:
     return upsert(engine, s.instrument_code_map, load_seed("code_map.csv"))
 
 
-def fetch_prices(engine: Engine, src: AkshareSource, start, end, load_type: str) -> int:
+def fetch_prices(engine: Engine, src: AkshareSource, start, end, load_type: str, min_coverage: float) -> int:
     """Writes daily_price rows in [start, end]. The full earlier history is used as context (Sina returns
-    it in the same request) so a suspension spanning the window start carries the last real close."""
+    it in the same request) so a suspension spanning the window start carries the last real close.
+    Series ending before `end` are inferred as suspended (see infer_trailing_suspensions) and logged."""
     start, end = pd.Timestamp(start), pd.Timestamp(end)
     cal = trading_days(engine)
     ctx_start = cal[0]
@@ -89,10 +90,17 @@ def fetch_prices(engine: Engine, src: AkshareSource, start, end, load_type: str)
         d = src.daily_raw(row.exchange, row.symbol, ctx_start, end)
         daily.append(d.assign(instrument_id=row.instrument_id))
         factors.append(src.hfq_factor(row.exchange, row.symbol).assign(instrument_id=row.instrument_id))
-    px = build_daily_price(
+    px, inferred = build_daily_price(
         pd.concat(daily, ignore_index=True), pd.concat(factors, ignore_index=True),
-        inst[["instrument_id", "list_date"]], pd.Series(cal[(cal >= ctx_start) & (cal <= end)]),
+        inst[["instrument_id", "list_date", "status"]], pd.Series(cal[(cal >= ctx_start) & (cal <= end)]),
+        end=end, min_coverage=min_coverage,
     )
+    inferred = inferred[inferred["trade_date"] >= start]
+    if len(inferred):
+        log.warning(
+            "no quote -> inferred suspended (%d rows): %s", len(inferred),
+            inferred.groupby("instrument_id")["trade_date"].agg(["min", "max", "count"]).to_string(),
+        )
     px = px[(px["trade_date"] >= start) & (px["trade_date"] <= end)].assign(ingested_at=now_cst(), load_type=load_type)
     return upsert(engine, s.daily_price, px)
 

@@ -15,7 +15,7 @@ def backfill(engine: Engine, cfg, end=None) -> pd.DatetimeIndex:
     log.info("instruments: %d rows", etl.fetch_instruments(engine, src))
     log.info("code map: %d rows", etl.apply_code_map(engine))
     start = pd.Timestamp(cfg["data"]["price_start"])
-    log.info("prices %s..%s: %d rows", start.date(), end.date(), etl.fetch_prices(engine, src, start, end, "backfill"))
+    log.info("prices %s..%s: %d rows", start.date(), end.date(), etl.fetch_prices(engine, src, start, end, "backfill", cfg["data"]["suspension_infer_min_coverage"]))
     path = etl.generate_positions(engine, cfg, end)
     log.info("positions: %d rows loaded from %s", etl.load_positions(engine, cfg, path), path)
     res, blocked = etl.run_dq(engine, cfg, start, end, run_id=f"backfill-{etl.now_cst():%Y%m%dT%H%M%S}")
@@ -31,7 +31,7 @@ def daily(engine: Engine, cfg, date=None) -> pd.DatetimeIndex | None:
     if d not in etl.trading_days(engine, d, d):
         log.info("%s is not a trading day, nothing to do", d.date())
         return None
-    log.info("prices %s: %d rows", d.date(), etl.fetch_prices(engine, src, d, d, "daily"))
+    log.info("prices %s: %d rows", d.date(), etl.fetch_prices(engine, src, d, d, "daily", cfg["data"]["suspension_infer_min_coverage"]))
     path = etl.generate_positions(engine, cfg, d)
     log.info("positions: %d rows loaded", etl.load_positions(engine, cfg, path))
     res, blocked = etl.run_dq(engine, cfg, d, d, run_id=f"daily-{etl.now_cst():%Y%m%dT%H%M%S}")

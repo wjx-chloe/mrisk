@@ -1,7 +1,14 @@
 import pandas as pd
 import pytest
 
-from mrisk.data.transform import apply_hfq, build_daily_price, drop_before_listing, fill_suspended, infer_board
+from mrisk.data.transform import (
+    apply_hfq,
+    build_daily_price,
+    drop_before_listing,
+    fill_suspended,
+    infer_board,
+    infer_trailing_suspensions,
+)
 
 D = pd.to_datetime
 
@@ -81,7 +88,56 @@ def test_build_daily_price_columns():
     cal = pd.Series(D(["2025-01-02", "2025-01-03"]))
     daily = pd.DataFrame({"instrument_id": ["A"], "trade_date": D(["2025-01-02"]), "close": [2.0], "volume": [10]})
     factors = pd.DataFrame({"instrument_id": ["A"], "effective_date": D(["1900-01-01"]), "hfq_factor": [3.0]})
-    lst = pd.DataFrame({"instrument_id": ["A"], "list_date": D(["2000-01-01"])})
-    out = build_daily_price(daily, factors, lst, cal)
+    inst = pd.DataFrame({"instrument_id": ["A"], "list_date": D(["2000-01-01"]), "status": ["active"]})
+    out, inferred = build_daily_price(daily, factors, inst, cal)
     assert out.columns.tolist() == ["trade_date", "instrument_id", "close", "adj_close", "volume", "is_suspended"]
     assert out["adj_close"].tolist() == [6.0]
+    assert inferred.empty
+
+
+# 5 instruments, 4 days; E stops quoting after day 2, D after day 3
+CAL5 = D(["2025-01-02", "2025-01-03", "2025-01-06", "2025-01-07"])
+
+
+def _five(drop_all_last_day=False):
+    rows = []
+    for s in "ABCDE":
+        last = {"D": 3, "E": 2}.get(s, 4)
+        for k, d in enumerate(CAL5[:last]):
+            if drop_all_last_day and d == CAL5[-1]:
+                continue
+            rows.append({"instrument_id": s, "trade_date": d, "close": 10.0 + k, "adj_close": 20.0 + k, "volume": 5})
+    px = pd.DataFrame(rows)
+    return fill_suspended(px, pd.Series(CAL5)), px[["instrument_id", "trade_date"]]
+
+
+def test_infer_trailing_suspensions_carries_last_close():
+    px, obs = _five()
+    out, inferred = infer_trailing_suspensions(px, obs, pd.Series(CAL5), CAL5[-1], set("ABCDE"), 0.6)
+    # coverage day3 = 4/5, day4 = 3/5 -> both >= 0.6
+    assert sorted(zip(inferred["instrument_id"], inferred["trade_date"])) == [
+        ("D", CAL5[3]), ("E", CAL5[2]), ("E", CAL5[3])
+    ]
+    assert inferred["is_suspended"].all() and (inferred["volume"] == 0).all()
+    e = inferred[inferred["instrument_id"] == "E"]
+    assert e["close"].tolist() == [11.0, 11.0] and e["adj_close"].tolist() == [21.0, 21.0]
+    assert len(out) == len(px) + 3
+
+
+def test_infer_stops_at_first_low_coverage_day():
+    px, obs = _five()
+    # threshold 0.7: day3 4/5=0.8 ok, day4 3/5=0.6 not -> E filled only on day3, D not at all
+    _, inferred = infer_trailing_suspensions(px, obs, pd.Series(CAL5), CAL5[-1], set("ABCDE"), 0.7)
+    assert list(zip(inferred["instrument_id"], inferred["trade_date"])) == [("E", CAL5[2])]
+
+
+def test_no_inference_when_whole_day_missing():
+    px, obs = _five(drop_all_last_day=True)
+    _, inferred = infer_trailing_suspensions(px, obs, pd.Series(CAL5), CAL5[-1], set("ABCDE"), 0.8)
+    assert CAL5[-1] not in set(inferred["trade_date"])
+
+
+def test_no_inference_for_delisted():
+    px, obs = _five()
+    _, inferred = infer_trailing_suspensions(px, obs, pd.Series(CAL5), CAL5[-1], set("ABCD"), 0.6)
+    assert set(inferred["instrument_id"]) == {"D"}
