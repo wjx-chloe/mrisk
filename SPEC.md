@@ -45,7 +45,7 @@
 |---|---|---|
 | 头寸 / 持仓 (position) | 某天持有某只股票多少股 | 一条记录：(日期, 股票代码, 数量) |
 | 市值 (market value) | 数量 × 收盘价 | 一个加权和 |
-| 收益率 (return) | 今天价格相对昨天的变化 | 对数收益 ln(P_t / P_{t-1})，是我们的随机变量 |
+| 收益率 (return) | 今天价格相对昨天的变化 | 默认简单收益 P_t / P_{t-1} − 1（可按市值线性加权成组合收益）；对数收益 ln(P_t / P_{t-1}) 作为可选项。是我们的随机变量 |
 | 组合损益 P&L | 组合一天赚了或亏了多少钱 | 各股收益率以市值加权求和，再乘以组合总市值 |
 | VaR (Value at Risk) | "在 99% 的情况下，一天最多亏 X" | 损失分布的 99% 分位数 |
 | ES (Expected Shortfall) | "在那 1% 的坏情况里，平均亏多少" | 超过 VaR 的条件期望 E[L \| L > VaR] |
@@ -235,10 +235,10 @@ DQ01 对照、停牌补行、调度判断是否交易日都以此为准。
 
 ### 5.1 参数（config.yaml）
 ```yaml
-confidence: 0.99          # ⚠️ 默认 99%
+confidence: [0.95, 0.99]  # 两个都算、都落库；回测与限额用 0.99
 holding_period_days: 1
 lookback_days: 250        # ⚠️ 默认 250 个交易日 ≈ 1 年
-return_type: log          # log / simple
+return_type: simple       # simple / log；默认 simple，因为组合损益要按市值线性加权，对数收益不可线性加总
 parametric_dist: normal   # normal / t（t 为进阶）
 ```
 
