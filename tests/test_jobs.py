@@ -3,12 +3,14 @@ import datetime as dt
 import numpy as np
 import pandas as pd
 import pytest
+from sqlalchemy import delete
 
 from mrisk.config import load_config
 from mrisk.db import schema as s
-from mrisk.db.repo import get_engine, init_db, read_frame
+from mrisk.db.repo import get_engine, init_db, read_frame, upsert
 from mrisk.jobs import daily as jobs
 from mrisk.jobs import etl
+from mrisk.jobs import risk as risk_job
 from mrisk.jobs.scheduler import build_trigger
 
 CAL = pd.bdate_range("2025-03-03", "2025-06-30")
@@ -157,3 +159,101 @@ def test_scheduler_trigger_weekday_1630():
     t = build_trigger("16:30")
     nxt = t.get_next_fire_time(None, pd.Timestamp("2026-09-19 12:00", tz="Asia/Shanghai").to_pydatetime())
     assert (nxt.weekday(), nxt.hour, nxt.minute) == (0, 16, 30)
+
+
+# ---- risk job ------------------------------------------------------------------------------------------------
+SWITCH = pd.Timestamp("2025-05-06")
+RISK_DATE = pd.Timestamp("2025-05-20")  # a 20-return window ending here starts 2025-04-23 and spans SWITCH
+
+
+@pytest.fixture
+def risk_env(env):
+    engine, cfg = env
+    cfg["lookback_days"] = 20
+    assert len(jobs.backfill(engine, cfg, end=LAST_BACKFILL)) == 0
+    return engine, cfg
+
+
+def test_risk_job_writes_all_levels_and_bj_series_is_continuous_across_920_switch(risk_env):
+    engine, cfg = risk_env
+    status = risk_job.run_risk(engine, cfg, RISK_DATE, run_id="r1")
+    assert status.to_dict() == {RISK_DATE: "ok"}
+
+    rr = read_frame(engine, s.risk_result)
+    pos = read_frame(engine, s.position, RISK_DATE, RISK_DATE)
+    n_ind = read_frame(engine, s.instrument, date_col="list_date").set_index("instrument_id").loc[pos["instrument_id"], "industry_l1"].nunique()
+    assert len(rr) == (1 + n_ind + len(pos)) * 2
+    assert set(rr["confidence"]) == {0.95, 0.99} and set(rr["run_id"]) == {"r1"} and rr["pnl_actual"].isna().all()
+    assert rr.loc[rr["level"] == "portfolio", "market_value"].iloc[0] == pytest.approx((pos["quantity"] * read_frame(
+        engine, s.daily_price, RISK_DATE, RISK_DATE).set_index("instrument_id").loc[pos["instrument_id"], "close"].to_numpy()).sum())
+    assert "BJ920682" in set(rr["level_key"]) and not rr["level_key"].str.contains("834682").any()
+
+    # BJ920682 is one series across the code switch: 21 prices, no gap, and its instrument VaR is exactly
+    # -quantile(MV x r) over returns that include the switch day
+    px = read_frame(engine, s.daily_price, "2025-04-22", RISK_DATE, instrument_id="BJ920682").set_index("trade_date")
+    assert len(px) == 21 and SWITCH in px.index and not px["is_suspended"].any()
+    r = (px["adj_close"] / px["adj_close"].shift(1) - 1).dropna()
+    assert r[SWITCH] == pytest.approx(px.loc[SWITCH, "adj_close"] / px["adj_close"].iloc[px.index.get_loc(SWITCH) - 1] - 1)
+    mv = pos.set_index("instrument_id").loc["BJ920682", "quantity"] * px.loc[RISK_DATE, "close"]
+    bj = rr[rr["level_key"] == "BJ920682"].set_index("confidence")
+    assert bj.loc[0.99, "var_hs"] == pytest.approx(-np.quantile(mv * r.to_numpy(), 0.01), rel=1e-12)
+    assert bj.loc[0.95, "var_param"] == pytest.approx(1.6448536269514722 * mv * r.std(ddof=1), rel=1e-12)
+
+
+def test_risk_job_rerun_replaces_the_date(risk_env):
+    engine, cfg = risk_env
+    risk_job.run_risk(engine, cfg, RISK_DATE, run_id="r1")
+    dropped = read_frame(engine, s.position, RISK_DATE, RISK_DATE)["instrument_id"].iloc[0]
+    with engine.begin() as conn:
+        conn.execute(delete(s.position).where(s.position.c.trade_date == RISK_DATE.date(), s.position.c.instrument_id == dropped))
+    risk_job.run_risk(engine, cfg, RISK_DATE, run_id="r2")
+    rr = read_frame(engine, s.risk_result)
+    assert set(rr["run_id"]) == {"r2"}
+    assert dropped not in set(rr["level_key"])
+
+
+def test_risk_job_gates_on_latest_dq_run(risk_env, caplog):
+    engine, cfg = risk_env
+    d1, d2 = pd.Timestamp("2025-05-21"), pd.Timestamp("2025-05-22")
+    # a later DQ run fails a blocking rule on d1; d2 has no DQ result at all
+    upsert(engine, s.dq_result, pd.DataFrame([{
+        "run_id": "later", "check_date": d1, "rule_id": "DQ02", "status": "fail", "n_checked": 6, "n_failed": 1,
+        "detail_json": None, "created_at": dt.datetime(2030, 1, 1)}]))
+    with engine.begin() as conn:
+        conn.execute(delete(s.dq_result).where(s.dq_result.c.check_date == d2.date()))
+    status = risk_job.run_risk(engine, cfg, RISK_DATE, d2, run_id="g")
+    assert status.to_dict() == {RISK_DATE: "ok", d1: "blocked", d2: "no_dq"}
+    assert set(read_frame(engine, s.risk_result)["trade_date"]) == {RISK_DATE}
+    assert "DQ status blocked" in caplog.text and "DQ status no_dq" in caplog.text
+
+
+def test_risk_job_refuses_short_history(risk_env):
+    engine, cfg = risk_env
+    with pytest.raises(ValueError, match="need 21 prices"):
+        risk_job.run_risk(engine, cfg, "2025-04-01")
+
+
+def test_risk_job_logs_suspension_and_empty_es_tail(risk_env, caplog):
+    engine, cfg = risk_env
+    iid = read_frame(engine, s.position, RISK_DATE, RISK_DATE)["instrument_id"].iloc[0]
+    # suspend one held name for the whole window: flat price, every return 0, so its HS tail is empty
+    px = read_frame(engine, s.daily_price, "2025-04-22", RISK_DATE, instrument_id=iid)
+    flat = px.assign(adj_close=px["adj_close"].iloc[0], close=px["close"].iloc[0], is_suspended=True)
+    upsert(engine, s.daily_price, flat)
+    caplog.set_level("INFO")
+    risk_job.run_risk(engine, cfg, RISK_DATE)
+    assert f"'{iid}': 20" in caplog.text
+    assert "ES set to VaR for" in caplog.text
+    assert f"'instrument:{iid}@0.95'" in caplog.text and f"'instrument:{iid}@0.99'" in caplog.text
+    assert "portfolio:" not in caplog.text
+    rr = read_frame(engine, s.risk_result)
+    one = rr[rr["level_key"] == iid]
+    assert (one["var_hs"] == 0).all() and (one["es_hs"] == 0).all() and (one["var_param"] == 0).all()
+
+
+@pytest.mark.parametrize("key, value, msg", [("holding_period_days", 10, "1-day"), ("parametric_dist", "t", "normal"), ("return_type", "pct", "return_type")])
+def test_risk_job_rejects_unsupported_params(risk_env, key, value, msg):
+    engine, cfg = risk_env
+    cfg[key] = value
+    with pytest.raises(ValueError, match=msg):
+        risk_job.run_risk(engine, cfg, RISK_DATE)
