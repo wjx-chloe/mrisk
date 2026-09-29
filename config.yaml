@@ -2,7 +2,7 @@
 confidence: [0.95, 0.99]
 holding_period_days: 1
 lookback_days: 250
-return_type: log
+return_type: simple   # simple / log；组合损益按市值线性加权，默认简单收益（SPEC §5.1）
 parametric_dist: normal
 
 database:
