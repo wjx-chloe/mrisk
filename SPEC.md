@@ -252,7 +252,7 @@ parametric_dist: normal   # normal / t（t 为进阶）
    - ⚠️ 分位数插值方法默认 `linear`（numpy 默认）
 5. **参数法 VaR**：
    - `Σ = cov(R)`，`σ_p = sqrt(wᵀ Σ w)`
-   - `VaR_param = MV_total × z_α × σ_p`，z_0.99 = 2.326
+   - `VaR_param = MV_total × z_α × σ_p`，z_α = Φ⁻¹(α)（标准正态分位数，取精确值，99% 时约 2.3263，95% 时约 1.6449）
 6. **ES**：`ES_hs = −mean(pnl[pnl < −VaR_hs])`
 7. **分层 VaR**：个股级 VaR 用单只股票的历史损益算；行业级用行业子组合算。**不要求各层 VaR 可加**（VaR 本身不满足次可加性，这是面试常考点）
 8. 写入 risk_result
