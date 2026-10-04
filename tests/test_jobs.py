@@ -446,3 +446,63 @@ def test_pnl_gate_and_invalidation_follow_each_tables_dependencies(risk_env):
     gone = gate.invalidate(engine, cfg, g, g)
     assert gone["pnl_hypo"].tolist() == [g] and gone["risk_result"].tolist() == [g]
     assert gone["var_attribution"].tolist() == [g, cal[i + 4]]  # positions of t - 1 and t
+
+
+# ---- backtest job ---------------------------------------------------------------------------------------------
+from mrisk.engine.backtest import christoffersen_ind, kupiec_pof  # noqa: E402
+from mrisk.jobs import backtest as backtest_job  # noqa: E402
+
+
+@pytest.fixture
+def bt_env(env, monkeypatch):
+    engine, cfg = env
+    cfg["lookback_days"] = 5
+    cfg["backtest_window_days"] = 15
+    monkeypatch.setattr(backtest_job, "TRAFFIC_LIGHT_OBS", 15)
+    assert len(jobs.backfill(engine, cfg, end=LAST_BACKFILL)) == 0
+    risk_job.run_risk(engine, cfg, "2025-04-01", "2025-06-26")
+    pnl_job.run_pnl(engine, cfg, "2025-04-01", "2025-06-26")
+    return engine, cfg
+
+
+def test_backtest_job_matches_loop_recompute(bt_env):
+    engine, cfg = bt_env
+    status = backtest_job.run_backtest(engine, cfg, "2025-04-01", "2025-06-30", run_id="b1")
+    cal = etl.trading_days(engine)
+    first_ok = cal[cal.get_loc(pd.Timestamp("2025-04-01")) + 15]  # realisation date of the 15th observation
+    assert (status[status.index < first_ok] == "warming_up").all() and (status[status.index >= first_ok] == "ok").all()
+    br = read_frame(engine, s.backtest_result, date_col="asof_date")
+    assert len(br) == (status == "ok").sum() * 4
+    zones = br.groupby(["method", "confidence"])["zone"].apply(lambda z: z.notna().all())
+    assert zones.to_dict() == {("hs", 0.95): False, ("hs", 0.99): True, ("param", 0.95): False, ("param", 0.99): False}
+
+    rr = read_frame(engine, s.risk_result, level="portfolio").set_index(["trade_date", "confidence"])
+    ph = read_frame(engine, s.pnl_hypo, date_col="position_date", level="portfolio").set_index("pnl_date")
+    for a in [first_ok, pd.Timestamp("2025-06-02"), pd.Timestamp("2025-06-27")]:
+        win = ph.loc[:a].tail(15)
+        for method, col in (("hs", "var_hs"), ("param", "var_param")):
+            for conf in (0.95, 0.99):
+                var = np.array([rr.at[(t, conf), col] for t in win["position_date"]])
+                hit = win["pnl"].to_numpy() < -var
+                c = {"00": 0, "01": 0, "10": 0, "11": 0}
+                for x, y in zip(hit[:-1], hit[1:]):
+                    c[f"{int(x)}{int(y)}"] += 1
+                row = br[(br["asof_date"] == a) & (br["method"] == method) & (br["confidence"] == conf)].iloc[0]
+                assert row["n_obs"] == 15 and row["n_exceptions"] == hit.sum()
+                assert row["lr_pof"] == pytest.approx(float(kupiec_pof(15, hit.sum(), 1 - conf)[0]), rel=1e-12)
+                assert row["lr_ind"] == pytest.approx(float(christoffersen_ind(c["00"], c["01"], c["10"], c["11"])[0]), rel=1e-12, abs=1e-12)
+
+
+def test_backtest_job_leaves_no_result_on_windows_with_a_gap(bt_env):
+    engine, cfg = bt_env
+    backtest_job.run_backtest(engine, cfg, "2025-04-01", "2025-06-30")
+    hole = pd.Timestamp("2025-05-21")  # e.g. a day the DQ gate refused
+    with engine.begin() as conn:
+        conn.execute(delete(s.pnl_hypo).where(s.pnl_hypo.c.position_date == hole.date()))
+    status = backtest_job.run_backtest(engine, cfg, "2025-04-01", "2025-06-30")
+    cal = etl.trading_days(engine)
+    i = cal.get_loc(hole)
+    gap = cal[i + 1 : i + 16]  # realisation dates whose 15-observation window holds the hole
+    assert status.index[status == "gap"].equals(gap)
+    stored = set(read_frame(engine, s.backtest_result, date_col="asof_date")["asof_date"])
+    assert not stored & set(gap) and cal[i] in stored and cal[i + 16] in stored
