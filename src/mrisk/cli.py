@@ -7,7 +7,7 @@ import pandas as pd
 from mrisk.config import database_url, load_config
 from mrisk.db.repo import get_engine, init_db
 from mrisk.jobs import daily as jobs
-from mrisk.jobs import etl
+from mrisk.jobs import etl, gate
 from mrisk.jobs import risk as risk_job
 
 
@@ -48,7 +48,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "dq":
         res, blocked = etl.run_dq(engine, cfg, pd.Timestamp(args.start), pd.Timestamp(args.end))
         jobs._log_dq(res, blocked)
-        risk_job.invalidate_risk(engine, cfg, args.start, args.end)
+        gate.invalidate(engine, cfg, args.start, args.end)
         return 2 if len(blocked) else 0
     if args.cmd == "risk":
         if args.end and not args.start:

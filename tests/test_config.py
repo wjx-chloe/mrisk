@@ -1,5 +1,5 @@
 from mrisk.config import database_url, load_config
-from mrisk.jobs.risk import blocking_scope
+from mrisk.jobs.gate import blocking_scope
 
 
 def test_repo_config_loads_both_confidence_levels():
