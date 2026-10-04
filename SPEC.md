@@ -130,8 +130,9 @@
 | var_hs | numeric | 历史模拟法 VaR，1 日，置信度见 confidence |
 | var_param | numeric | 参数法 VaR |
 | es_hs | numeric | 历史模拟法 ES |
-| pnl_actual | numeric | 当日实际损益（次日回填） |
 | run_id | text | 本次计算批次 |
+
+回测用的损益不放在这张表里，见 §3.12 pnl_hypo。
 
 ### 3.7 limit_rule — 限额规则
 | 字段 | 类型 | 说明 |
@@ -192,6 +193,50 @@ DQ01 对照、停牌补行、调度判断是否交易日都以此为准。
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | trade_date | date PK | 交易日 |
+
+### 3.12 pnl_hypo — 假设损益
+本系统没有真实成交，回测用的是"持仓不动"的假设损益：持有 t 日收盘持仓到下一交易日 t+1。
+主键 (position_date, portfolio_id, level, level_key)。
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| position_date | date | 持仓日 t（对应 risk_result.trade_date） |
+| pnl_date | date | 损益实现日 t+1（下一交易日） |
+| portfolio_id | text | |
+| level / level_key | text | 同 risk_result |
+| market_value | numeric | t 日市值 = Σ quantity × close_t |
+| pnl | numeric | t 日市值 × 后复权简单收益 (adj_close_{t+1} / adj_close_t − 1)，t+1 停牌的股票收益为 0。与 VaR 的 PnL 同口径，不用未复权价差 |
+| run_id | text | |
+
+### 3.13 backtest_result — 回测结果
+主键 (asof_date, portfolio_id, method, confidence, window_days)。
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| asof_date | date | 窗口内最后一个观测的损益实现日 |
+| portfolio_id | text | |
+| method | text | hs / param |
+| confidence | numeric | 0.95 / 0.99 |
+| window_days | integer | 观测数窗口，250 |
+| n_obs | integer | 窗口内观测数 |
+| n_exceptions | integer | 例外数 |
+| lr_pof / p_value_pof | numeric | Kupiec POF 统计量与 p 值 |
+| lr_ind / p_value_ind | numeric | Christoffersen 独立性统计量与 p 值 |
+| zone | text | green / yellow / red，仅 method = hs 且 confidence = 0.99；其余为空 |
+| run_id | text | |
+
+### 3.14 var_attribution — VaR 差异归因
+主键 (trade_date, portfolio_id, metric, confidence, effect, level, level_key)。
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| trade_date | date | t（解释 t−1 → t 的变化） |
+| portfolio_id | text | |
+| metric | text | var_hs / var_param / es_hs |
+| confidence | numeric | 0.95 / 0.99 |
+| effect | text | quantity / revaluation / window / total，见 §5.3 |
+| level | text | portfolio / instrument |
+| level_key | text | 组合级为 portfolio_id，个股级为 instrument_id |
+| value | numeric | 组合级为效应值；个股级为该股的 Euler 贡献，各股之和等于组合级 |
+| window_dropped | date | 仅 effect = window：当天移出窗口的收益日期 |
+| run_id | text | |
 
 ---
 
@@ -258,23 +303,36 @@ parametric_dist: normal   # normal / t（t 为进阶）
 8. 写入 risk_result
 
 ### 5.3 VaR 差异归因（简化版）
-今日 VaR − 昨日 VaR 分解为：
-- **持仓变动效应**：用昨日收益率窗口 × 今日持仓 − 昨日收益率窗口 × 昨日持仓
-- **市场变动效应**：用今日收益率窗口 × 今日持仓 − 昨日收益率窗口 × 今日持仓
-- 两者之和恰好等于总变化（这是一种顺序分解，先持仓后市场）
+记 V(W, P) 为用收益率窗口 W、持仓市值向量 P 算出的风险指标；q 为持股数量，c 为收盘价。今日 − 昨日按顺序分解为三项：
+- **数量效应**：V(W_{t−1}, q_t · c_{t−1}) − V(W_{t−1}, q_{t−1} · c_{t−1})
+- **重估效应**：V(W_{t−1}, q_t · c_t) − V(W_{t−1}, q_t · c_{t−1})
+- **窗口效应**：V(W_t, q_t · c_t) − V(W_{t−1}, q_t · c_t)，同时记下当天移出窗口的收益日期
+- 三者之和精确等于 V_t − V_{t−1}；不调仓的日子数量效应精确为 0
+- 对 var_hs、var_param、es_hs 两个置信度都做
 
-输出：组合级三个数字 + 个股级贡献 top 10。
+个股贡献用 Euler 分配，各股之和精确等于组合值：
+- var_hs：取决定分位数的两个情景日（线性插值的上下两天），按插值权重对个股当天损益加权；
+- es_hs：尾部各情景日个股损益的平均；
+- var_param：z_α × e_i × (Σe)_i / σ_p。
+每个效应的个股贡献 = 前后两次评估的个股分量之差。
+
+输出：组合级三项效应 + 个股级贡献（展示 top 10），写入 var_attribution。
 
 ### 5.4 回测
-每日用"昨天算的 VaR"对比"今天实际 P&L"：
-- **例外**：`pnl_actual < −var_hs`（取 confidence = 0.99 的行）
+每日用"t 日算的 VaR"对比"t → t+1 的假设损益"（pnl_hypo，组合级）：
+- **例外**：`pnl < −VaR`（严格小于）
+- **范围**：method ∈ {hs, param} × confidence ∈ {0.95, 0.99} 都做检验；红绿灯只用于 hs × 0.99
+- **窗口**：滚动 250 个观测；窗口内任一观测缺失（例如被 DQ 拦下）时，不输出该日结果
 - **Kupiec POF 检验**：
   - 样本 T 天，例外数 x，期望超越率 p = 1 − confidence
-  - `LR = −2 ln[(1−p)^(T−x) p^x] + 2 ln[(1−x/T)^(T−x) (x/T)^x]`
-  - LR ~ χ²(1)，5% 显著性水平临界值 3.84
+  - `LR = −2 ln[(1−p)^(T−x) p^x] + 2 ln[(1−x/T)^(T−x) (x/T)^x]`，x = 0 或 x = T 时按 0·ln0 = 0
+  - LR ~ χ²(1)，5% 显著性水平临界值取 χ²₁ 的 95% 分位精确值（约 3.8415）
+- **Christoffersen 独立性检验**：对窗口内相邻观测的转移计数 n00、n01、n10、n11
+  - π01 = n01/(n00+n01)，π11 = n11/(n10+n11)，π = (n01+n11)/(n00+n01+n10+n11)
+  - `LR_ind = −2 ln[(1−π)^(n00+n10) π^(n01+n11)] + 2 ln[(1−π01)^n00 π01^n01 (1−π11)^n10 π11^n11]` ~ χ²(1)
+  - 计数为 0 的项按 0·ln0 = 0
 - **巴塞尔红绿灯**（250 天窗口）：例外 ≤ 4 绿，5–9 黄，≥ 10 红
-- 进阶（可选）：Christoffersen 独立性检验，检查例外是否扎堆
-- 输出：回测报告表 + 例外日历图
+- 输出：backtest_result + 例外日历图
 
 ### 5.5 性能要求
 50 只股票、250 天窗口，全部指标单次计算 < 1 秒（NumPy 向量化，不允许 Python 循环遍历日期）。
