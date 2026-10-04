@@ -139,22 +139,25 @@
 |---|---|---|
 | rule_id | text PK | |
 | portfolio_id | text | |
-| metric | text | var_hs_99 / es_hs_99 / concentration_instrument / concentration_industry |
-| scope | text | portfolio / industry:银行 / instrument:SH600000 |
+| metric | text | var_hs_99 / es_hs_99 / es_hs_95 / concentration_instrument / concentration_industry / stress_loss:<scenario_id>。损失类指标一律用正数表示损失 |
+| scope | text | portfolio / industry:银行 / instrument:SH600000；`industry:*`、`instrument:*` 表示对每个成员生效，检查值取成员中的最大值 |
 | operator | text | `<=` / `<` |
-| threshold | numeric | |
+| threshold | numeric | breach 阈值 |
 | threshold_type | text | absolute（金额）/ pct_of_mv（占市值比例） |
-| severity | text | warn / breach |
+| warn_ratio | numeric | warn 阈值 = warn_ratio × threshold |
 | is_active | bool | |
 
 ### 3.8 limit_check — 限额监控结果
-| 字段 | 类型 |
-|---|---|
-| trade_date | date |
-| rule_id | text |
-| actual_value | numeric |
-| threshold | numeric |
-| status | text（ok / warn / breach） |
+主键 (trade_date, rule_id)。
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| trade_date | date | |
+| rule_id | text | |
+| actual_value | numeric | 检查值；通配 scope 为成员中的最大值 |
+| threshold | numeric | breach 阈值（已换算成与 actual_value 同单位） |
+| warn_threshold | numeric | warn 阈值 |
+| status | text | ok / warn / breach |
+| detail | jsonb | 通配 scope：超过 warn 阈值的成员及其值 |
 
 ### 3.9 dq_rule / dq_result — 数据质量规则与结果
 规则用 SQL 或 Python 表达式描述，结果记录每日每条规则的通过/失败及失败明细。
@@ -186,13 +189,28 @@ dq_result：主键 (run_id, check_date, rule_id)
 |---|---|---|
 | scenario_id | text PK | |
 | type | text | historical / hypothetical |
-| definition | jsonb | historical: {start, end}；hypothetical: {market: -0.05} 或 {industry: {银行: -0.10}} |
+| definition | jsonb | historical: {base, end}（基准日收盘 → 结束日收盘）；hypothetical: {market: -0.05} 或 {industry: {银行: -0.10}} |
 
 ### 3.11 trade_calendar — 交易日历
 DQ01 对照、停牌补行、调度判断是否交易日都以此为准。
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | trade_date | date PK | 交易日 |
+
+### 3.15 stress_result — 压力测试结果
+主键 (trade_date, portfolio_id, scenario_id, level, level_key)。
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| trade_date | date | 持仓日（用这天的持仓做情景） |
+| portfolio_id | text | |
+| scenario_id | text | |
+| level / level_key | text | portfolio / industry / instrument，同 risk_result |
+| market_value | numeric | 持仓日市值 |
+| pnl | numeric | 情景累计损益（负数为亏损） |
+| max_daily_loss | numeric | 情景路径上的最大单日损失（正数；假设情景为空） |
+| proxy_mv_unlisted | numeric | 情景期间未上市、用代理收益的市值 |
+| proxy_mv_suspended | numeric | 情景期间停牌、用代理收益的市值 |
+| run_id | text | |
 
 ### 3.12 pnl_hypo — 假设损益
 本系统没有真实成交，回测用的是"持仓不动"的假设损益：持有 t 日收盘持仓到下一交易日 t+1。
@@ -348,27 +366,29 @@ parametric_dist: normal   # normal / t（t 为进阶）
 ## 6. 模块三：压力测试与限额
 
 ### 6.1 压力测试
-- **历史情景**（⚠️ 默认预置这三个）：
-  - 2015-06-12 至 2015-07-08（2015 股灾）
-  - 2018-01-29 至 2018-02-09（2018 初回调）
-  - 2020-01-23 至 2020-02-03（疫情冲击，含长假后首日）
-  - 计算：把情景期间每日收益率代入当前持仓，输出累计损益、最大单日损益、按行业分解
+- **历史情景**统一定义为"基准日收盘 → 结束日收盘"。基准日取下跌开始前的最高收盘，这样第一天的下跌也算在内。预置三个：
+  - 2015-06-12 → 2015-07-08（2015 股灾；06-12 为顶点）
+  - 2018-01-24 → 2018-02-09（2018 初回调；01-24 为最高收盘，之后 01-25、01-26、01-29 连跌）
+  - 2020-01-22 → 2020-02-03（疫情冲击；只含 01-23 和长假后首日 02-03 两个交易日，测的就是长假无法交易的跳空风险）
+- **计算**：用持仓日的各股市值买入持有。每只股票的累计收益 = P_end / P_base − 1（P 为后复权价），累计损益 = Σ 市值 × 累计收益；同时沿情景路径算出每日损益，取最大单日损失；按行业分解（压测损益可加，行业之和等于组合）
+- **数据缺口代理**：情景期间未上市或停牌的股票，用同行业（股票池内）当日有真实行情的股票的等权平均收益代替；同行业有数据的股票少于 3 只时，退回全池等权。代理市值按"未上市""停牌"两种原因分开输出
 - **假设情景**：
   - 全市场 −5% / −10%
   - 某一行业 −10%，其余不变
   - 用户自定义：JSON 描述
 - **重大损失情景**：跑所有情景，按损失排序输出 top N
 
-### 6.2 限额规则（⚠️ 默认预置）
-| 规则 | 阈值 |
-|---|---|
-| 组合 VaR（历史模拟，99%） | ≤ 组合市值 × 3% |
-| 组合 ES | ≤ 组合市值 × 4% |
-| 单只股票市值占比 | ≤ 10% |
-| 单一行业市值占比 | ≤ 30% |
-| 2015 股灾情景累计损失 | ≤ 组合市值 × 25% |
+### 6.2 限额规则（预置）
+| 规则 | metric / scope | breach 阈值 | warn 比例 |
+|---|---|---|---|
+| 组合 VaR（历史模拟，99%） | var_hs_99 / portfolio | ≤ 组合市值 × 4% | 90% |
+| 组合 ES（历史模拟，99%） | es_hs_99 / portfolio | ≤ 组合市值 × 7% | 90% |
+| 单只股票市值占比 | concentration_instrument / instrument:* | ≤ 10% | 80% |
+| 单一行业市值占比 | concentration_industry / industry:* | ≤ 30% | 80% |
+| 2015 股灾情景累计损失 | stress_loss:<2015 情景> / portfolio | 待定：压测做完后，用 497 天的候选阈值表再定 | 80% |
 
-每条规则有 warn 阈值（80% 触发）和 breach 阈值（100% 触发）。
+每条规则有 breach 阈值和 warn 阈值（= warn 比例 × breach 阈值）。损失类指标（VaR、ES、情景损失）一律用正数表示损失。
+VaR99、ES99 的阈值依据 docs/week2-limit-material.md 和第 3 周规划中的候选阈值表。
 
 ### 6.3 监控与告警
 - 每日计算完成后自动跑所有 active 规则，写 limit_check
