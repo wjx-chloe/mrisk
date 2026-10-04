@@ -1,0 +1,112 @@
+[
+ {
+  "scenario_id": "HIST_2015",
+  "type": "historical",
+  "definition": {
+   "base": "2015-06-12",
+   "end": "2015-07-08"
+  }
+ },
+ {
+  "scenario_id": "HIST_2018",
+  "type": "historical",
+  "definition": {
+   "base": "2018-01-24",
+   "end": "2018-02-09"
+  }
+ },
+ {
+  "scenario_id": "HIST_2020",
+  "type": "historical",
+  "definition": {
+   "base": "2020-01-22",
+   "end": "2020-02-03"
+  }
+ },
+ {
+  "scenario_id": "MKT_-5",
+  "type": "hypothetical",
+  "definition": {
+   "market": -0.05
+  }
+ },
+ {
+  "scenario_id": "MKT_-10",
+  "type": "hypothetical",
+  "definition": {
+   "market": -0.1
+  }
+ },
+ {
+  "scenario_id": "IND_银行_-10",
+  "type": "hypothetical",
+  "definition": {
+   "industry": {
+    "银行": -0.1
+   }
+  }
+ },
+ {
+  "scenario_id": "IND_非银金融_-10",
+  "type": "hypothetical",
+  "definition": {
+   "industry": {
+    "非银金融": -0.1
+   }
+  }
+ },
+ {
+  "scenario_id": "IND_食品饮料_-10",
+  "type": "hypothetical",
+  "definition": {
+   "industry": {
+    "食品饮料": -0.1
+   }
+  }
+ },
+ {
+  "scenario_id": "IND_医药生物_-10",
+  "type": "hypothetical",
+  "definition": {
+   "industry": {
+    "医药生物": -0.1
+   }
+  }
+ },
+ {
+  "scenario_id": "IND_电子_-10",
+  "type": "hypothetical",
+  "definition": {
+   "industry": {
+    "电子": -0.1
+   }
+  }
+ },
+ {
+  "scenario_id": "IND_电力设备_-10",
+  "type": "hypothetical",
+  "definition": {
+   "industry": {
+    "电力设备": -0.1
+   }
+  }
+ },
+ {
+  "scenario_id": "IND_有色金属_-10",
+  "type": "hypothetical",
+  "definition": {
+   "industry": {
+    "有色金属": -0.1
+   }
+  }
+ },
+ {
+  "scenario_id": "IND_计算机_-10",
+  "type": "hypothetical",
+  "definition": {
+   "industry": {
+    "计算机": -0.1
+   }
+  }
+ }
+]

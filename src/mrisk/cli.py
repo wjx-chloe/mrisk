@@ -10,8 +10,10 @@ from mrisk.jobs import daily as jobs
 from mrisk.jobs import etl, gate
 from mrisk.jobs import attribution as attribution_job
 from mrisk.jobs import backtest as backtest_job
+from mrisk.jobs import limits as limits_job
 from mrisk.jobs import pnl as pnl_job
 from mrisk.jobs import risk as risk_job
+from mrisk.jobs import stress as stress_job
 
 # date-range jobs: name -> (help, run(engine, cfg, start, end) -> per-date status, no dates is an error,
 # statuses that are not errors)
@@ -26,6 +28,9 @@ RANGE_JOBS = {
         "split the day-on-day change of VaR / ES into quantity, revaluation and window effects -> var_attribution",
         attribution_job.run_attribution, False, {"ok"},
     ),
+    "stress": ("historical and hypothetical scenarios on each position date -> stress_result", stress_job.run_stress, True, {"ok"}),
+    # warn / breach / no_data are findings, not job failures
+    "limits": ("evaluate active limit rules on each position date -> limit_check", limits_job.run_limits, True, {"ok", "warn", "breach", "no_data"}),
 }
 
 

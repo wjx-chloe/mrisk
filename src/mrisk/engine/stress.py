@@ -59,7 +59,7 @@ def scenario_path(adj: pd.DataFrame, suspended: pd.DataFrame, industry: pd.Serie
     a = adj.to_numpy(dtype=float)
     s = suspended.reindex_like(adj).fillna(False).to_numpy(dtype=bool)
     listed = ~np.isnan(a)
-    s &= listed
+    s = s & listed
     proxy = proxy_returns(adj, suspended, industry).to_numpy()  # rows 1..D-1
     D, N = a.shape
 

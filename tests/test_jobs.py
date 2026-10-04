@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 
 import numpy as np
 import pandas as pd
@@ -11,6 +12,8 @@ from mrisk.db.repo import get_engine, init_db, read_frame, upsert
 from mrisk.jobs import daily as jobs
 from mrisk.jobs import etl
 from mrisk.jobs import gate
+from mrisk.jobs import limits as limits_job
+from mrisk.jobs import stress as stress_job
 from mrisk.jobs import risk as risk_job
 from mrisk.jobs.scheduler import build_trigger
 
@@ -19,6 +22,14 @@ LAST_BACKFILL = pd.Timestamp("2025-06-27")
 INDS = ["银行", "电子", "医药生物", "汽车"]
 SYMS = [("SH", f"6000{i:02d}") for i in range(6)] + [("SZ", f"0000{i:02d}") for i in range(6)]
 BJ = ("BJ", "920682")
+
+
+def stress_job_rules_csv():
+    """The repo's four limit rules plus a stress-loss rule on HIST_B, for the fake portfolio."""
+    from mrisk.jobs.limits import SEED as REPO_RULES
+
+    body = REPO_RULES.read_text(encoding="utf-8").rstrip("\n")
+    return body + "\nL_STRESS_B,P001,stress_loss:HIST_B,portfolio,<=,0.05,pct_of_mv,0.8,true,test\n"
 
 
 class FakeSource:
@@ -76,6 +87,20 @@ def env(tmp_path, monkeypatch):
     )
     (seed / "industry_override.csv").write_text("instrument_id,industry_l1,note\n", encoding="utf-8")
     monkeypatch.setattr(etl, "SEED_DIR", seed)
+    # stress scenarios inside the fake calendar: SH600003 is suspended on 2025-05-14 only
+    scen = tmp_path / "scenario.json"
+    scen.write_text(json.dumps([
+        {"scenario_id": "HIST_A", "type": "historical", "definition": {"base": "2025-05-12", "end": "2025-05-16"}},
+        {"scenario_id": "HIST_B", "type": "historical", "definition": {"base": "2025-05-14", "end": "2025-05-20"}},
+        {"scenario_id": "MKT_-5", "type": "hypothetical", "definition": {"market": -0.05}},
+        {"scenario_id": "IND_银行_-10", "type": "hypothetical", "definition": {"industry": {"银行": -0.10}}},
+    ], ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(stress_job, "SEED", scen)
+    rules = tmp_path / "limit_rule.csv"
+    rules.write_text(
+        stress_job_rules_csv(), encoding="utf-8"
+    )
+    monkeypatch.setattr(limits_job, "SEED", rules)
     src = FakeSource()
     monkeypatch.setattr(etl, "make_source", lambda cfg: src)
     engine = get_engine(f"sqlite:///{(tmp_path / 'm.db').as_posix()}")
@@ -548,3 +573,94 @@ def test_attribution_job_gate_uses_both_days(risk_env):
     status = attribution_job.run_attribution(engine, cfg, "2025-05-20", "2025-05-23")
     cal = etl.trading_days(engine)
     assert status.index[status != "ok"].tolist() == [F, cal[cal.get_loc(F) + 1]]
+
+
+# ---- stress and limits jobs -----------------------------------------------------------------------------------
+from mrisk.engine.returns import returns_window  # noqa: E402
+from mrisk.engine.stress import betas  # noqa: E402
+
+
+def test_stress_job_recomputes_from_db(risk_env):
+    engine, cfg = risk_env
+    t = pd.Timestamp("2025-05-20")
+    status = stress_job.run_stress(engine, cfg, t, run_id="s1")
+    assert status.to_dict() == {t: "ok"}
+    sr = read_frame(engine, s.stress_result, t, t)
+    assert set(sr["scenario_id"]) == {"HIST_A", "HIST_B", "MKT_-5", "IND_银行_-10"}
+    # stress P&L adds up across levels
+    for sid, g in sr.groupby("scenario_id"):
+        sums = g.groupby("level")["pnl"].sum()
+        assert sums["industry"] == pytest.approx(sums["portfolio"]) and sums["instrument"] == pytest.approx(sums["portfolio"])
+    port = sr[sr["level"] == "portfolio"].set_index("scenario_id")
+    pos = read_frame(engine, s.position, t, t).set_index("instrument_id")["quantity"]
+    px = read_frame(engine, s.daily_price).pivot(index="trade_date", columns="instrument_id")
+    mv = pos * px["close"].loc[t, pos.index]
+    # HIST_A 05-12 -> 05-16: every held name trades on both ends (SH600003's 05-14 suspension resumes inside),
+    # so each name's cumulative return is the real P_end / P_base - 1
+    cum = px["adj_close"].loc[pd.Timestamp("2025-05-16"), pos.index] / px["adj_close"].loc[pd.Timestamp("2025-05-12"), pos.index] - 1
+    assert port.at["HIST_A", "pnl"] == pytest.approx((mv * cum).sum(), rel=1e-12)
+    # the price dates each historical scenario read are recorded; HIST_B's base 05-14 sits in SH600003's suspension
+    spd = read_frame(engine, s.scenario_price_date, date_col="price_date").groupby("scenario_id")["price_date"]
+    assert spd.min()["HIST_A"] == pd.Timestamp("2025-05-12") and spd.max()["HIST_A"] == pd.Timestamp("2025-05-16")
+    assert spd.min()["HIST_B"] == pd.Timestamp("2025-05-13")  # s - 1, before the base
+    # IND_银行_-10: beta to the 银行 equal-weight factor on the VaR window of t, times -10%
+    inst = read_frame(engine, s.instrument, date_col="list_date").set_index("instrument_id")
+    R, _ = returns_window(px["adj_close"], px["is_suspended"].astype(bool), t, cfg["lookback_days"], cfg["return_type"])
+    bank = inst.index[inst["industry_l1"] == "银行"]
+    b = betas(R[pos.index], R[bank].mean(axis=1))
+    assert port.at["IND_银行_-10", "pnl"] == pytest.approx((mv * b * -0.10).sum(), rel=1e-9)
+    assert port.at["MKT_-5", "max_daily_loss"] != port.at["MKT_-5", "max_daily_loss"]  # NaN for hypothetical
+
+
+def test_stress_fixed_dates_gate_and_cascade_to_limits(risk_env):
+    engine, cfg = risk_env
+    days = ("2025-06-17", "2025-06-20")  # far enough from 05-19 that no relative window holds it
+    risk_job.run_risk(engine, cfg, *days)
+    stress_job.run_stress(engine, cfg, *days)
+    limits_job.run_limits(engine, cfg, *days)
+    lc = read_frame(engine, s.limit_check)
+    assert (lc[lc["rule_id"] == "L_STRESS_B"]["status"] != "no_data").all()
+    f = pd.Timestamp("2025-05-19")  # inside HIST_B (05-13..05-20), outside HIST_A (05-12..05-16)
+    _dq(engine, f, "DQ03")
+    g = gate.dq_gate(engine, cfg, _cal(engine, *days), "stress_result:historical", key="HIST_B")
+    assert (g["status"] == "blocked").all() and "price on dates HIST_B rests on: ['DQ03@2025-05-19']" in g["reason"].iloc[0]
+    assert (gate.dq_gate(engine, cfg, _cal(engine, *days), "stress_result:historical", key="HIST_A")["status"] == "ok").all()
+    gone = gate.invalidate(engine, cfg, f, f)
+    assert gone["stress_result:historical/HIST_B"].equals(_cal(engine, *days))
+    sr = read_frame(engine, s.stress_result, *days)
+    assert "HIST_B" not in set(sr["scenario_id"]) and {"HIST_A", "MKT_-5", "IND_银行_-10"} <= set(sr["scenario_id"])
+    lc = read_frame(engine, s.limit_check).set_index(["trade_date", "rule_id"])
+    stress_checks = lc.xs("L_STRESS_B", level="rule_id")
+    assert (stress_checks["status"] == "no_data").all() and stress_checks["actual_value"].isna().all()
+    assert stress_checks["detail"].iloc[0]["invalidated"] == "stress_result:historical/HIST_B"
+    assert (lc.xs("L_VAR99", level="rule_id")["status"] != "no_data").all()  # other limits untouched
+    # recomputing after the gate refuses HIST_B: a no_data row with the gate's reason, never a missing row
+    stress_job.run_stress(engine, cfg, *days)
+    limits_job.run_limits(engine, cfg, *days)
+    lc = read_frame(engine, s.limit_check)
+    b = lc[lc["rule_id"] == "L_STRESS_B"]
+    assert len(b) == 4 and (b["status"] == "no_data").all()
+    assert b["detail"].iloc[0]["missing"] == "stress_result" and b["detail"].iloc[0]["reason"].startswith("blocked: price on dates HIST_B")
+
+
+def test_limits_job_writes_every_rule_every_day_with_no_data_where_inputs_are_refused(risk_env):
+    engine, cfg = risk_env
+    cal = etl.trading_days(engine)
+    days = _cal(engine, "2025-06-02", "2025-06-06")
+    t = days[2]
+    _dq(engine, cal[cal.get_loc(t) - 3], "DQ03")  # a bad price inside t's VaR window, not on t itself
+    risk_job.run_risk(engine, cfg, days[0], days[-1])
+    stress_job.run_stress(engine, cfg, days[0], days[-1])
+    limits_job.run_limits(engine, cfg, days[0], days[-1])
+    lc = read_frame(engine, s.limit_check)
+    rules = set(read_frame(engine, s.limit_rule, date_col="rule_id")["rule_id"])
+    assert len(lc) == len(days) * len(rules)  # one row per rule per day, no gaps
+    at = lc[lc["trade_date"] == t].set_index("rule_id")
+    # VaR / ES rest on the window: no_data with the gate's reason; concentration rests on t only: evaluated
+    assert at.at["L_VAR99", "status"] == "no_data" and at.at["L_VAR99", "detail"]["missing"] == "risk_result"
+    assert "DQ03@" in at.at["L_VAR99", "detail"]["reason"]
+    assert at.at["L_CONC_INST", "status"] in ("ok", "warn", "breach") and at.at["L_CONC_INST", "actual_value"] > 0
+    # 6 names of ~1e7: single-name weights well above 10% -> breach, the offenders listed in detail
+    conc = lc[lc["rule_id"] == "L_CONC_INST"]
+    assert (conc["status"] == "breach").all()
+    assert all(m["value"] > 0.08 for m in conc["detail"].iloc[0]["members"])

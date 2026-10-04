@@ -7,8 +7,10 @@ from mrisk.jobs import etl
 from mrisk.jobs import gate
 from mrisk.jobs import attribution as attribution_job
 from mrisk.jobs import backtest as backtest_job
+from mrisk.jobs import limits as limits_job
 from mrisk.jobs import pnl as pnl_job
 from mrisk.jobs import risk as risk_job
+from mrisk.jobs import stress as stress_job
 
 log = logging.getLogger(__name__)
 
@@ -31,7 +33,8 @@ def backfill(engine: Engine, cfg, end=None) -> pd.DatetimeIndex:
 
 def daily(engine: Engine, cfg, date=None) -> pd.DatetimeIndex | None:
     """Incremental run for one trading day: prices -> positions -> DQ, then, only when DQ has no blocking
-    failure, risk of d -> hypothetical P&L realised on d -> backtest as of d -> attribution of d.
+    failure, risk of d -> hypothetical P&L realised on d -> backtest as of d -> attribution of d -> stress of d
+    -> limits of d (which always writes a row per rule, no_data where an input was refused).
     Returns the dates some step refused (DQ or a gate), or None if not a trading day."""
     src = etl.make_source(cfg)
     etl.fetch_trade_calendar(engine, src)
@@ -59,6 +62,9 @@ def daily(engine: Engine, cfg, date=None) -> pd.DatetimeIndex | None:
     refused += list(status.index[~status.isin(["ok", "warming_up"])])
     status = attribution_job.run_attribution(engine, cfg, d)
     refused += list(status.index[status != "ok"])
+    status = stress_job.run_stress(engine, cfg, d)
+    refused += list(status.index[status != "ok"])
+    limits_job.run_limits(engine, cfg, d)
     return pd.DatetimeIndex(sorted(set(refused)))
 
 
