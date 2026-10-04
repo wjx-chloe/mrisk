@@ -39,7 +39,10 @@ def historical_paths(engine: Engine, cfg, scenarios: pd.DataFrame, pool: pd.Data
         base, end = pd.Timestamp(r.definition["base"]), pd.Timestamp(r.definition["end"])
         lo = cal[max(cal.get_loc(base) - cfg["lookback_days"], 0)]  # room for suspensions running into the base
         px = read_frame(engine, s.daily_price, lo, end, instrument_id=pool["instrument_id"].tolist(), columns=PRICE_COLUMNS)
-        wide = px.pivot(index="trade_date", columns="instrument_id").reindex(cal[(cal >= lo) & (cal <= end)])
+        # rows from the first price actually loaded (price history starts at data.price_start); a suspension
+        # reaching back past it still raises in scenario_path
+        first = px["trade_date"].min()
+        wide = px.pivot(index="trade_date", columns="instrument_id").reindex(cal[(cal >= max(lo, first)) & (cal <= end)])
         wide = wide.reindex(columns=pd.MultiIndex.from_product([["adj_close", "is_suspended"], pool["instrument_id"]]))
         path = scenario_path(wide["adj_close"], wide["is_suspended"], ind, base, end)
         replace_partition(
