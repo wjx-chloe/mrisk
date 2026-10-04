@@ -391,3 +391,58 @@ def test_risk_job_rejects_unsupported_params(risk_env, key, value, msg):
     cfg[key] = value
     with pytest.raises(ValueError, match=msg):
         risk_job.run_risk(engine, cfg, RISK_DATE)
+
+
+# ---- hypothetical P&L job -------------------------------------------------------------------------------------
+from mrisk.jobs import pnl as pnl_job  # noqa: E402
+
+
+def test_pnl_job_matches_db_recompute_and_skips_unrealised(risk_env):
+    engine, cfg = risk_env
+    status = pnl_job.run_pnl(engine, cfg, "2025-05-02", LAST_BACKFILL, run_id="p1")
+    cal = etl.trading_days(engine)
+    expect = _cal(engine, "2025-05-02", LAST_BACKFILL)[:-1]  # 06-27 has no next-day prices yet
+    assert status.index.equals(expect) and (status == "ok").all()
+    ph = read_frame(engine, s.pnl_hypo, date_col="position_date")
+    port = ph[ph["level"] == "portfolio"].set_index("position_date")
+    px = read_frame(engine, s.daily_price).set_index(["trade_date", "instrument_id"])
+    pos = read_frame(engine, s.position)
+    for t in expect:
+        n = cal[cal.get_loc(t) + 1]
+        p = pos[pos["trade_date"] == t]
+        a0 = px.loc[[(t, i) for i in p["instrument_id"]]]
+        a1 = px.loc[[(n, i) for i in p["instrument_id"]]]
+        r = np.where(a1["is_suspended"].to_numpy(), 0.0, a1["adj_close"].to_numpy() / a0["adj_close"].to_numpy() - 1)
+        mv = p["quantity"].to_numpy() * a0["close"].to_numpy()
+        assert port.at[t, "pnl_date"] == n
+        assert port.at[t, "market_value"] == pytest.approx(mv.sum(), rel=1e-12)
+        assert port.at[t, "pnl"] == pytest.approx((mv * r).sum(), rel=1e-12, abs=1e-6)
+    # BJ920682 across the 920 switch: held on 05-05, realised on 05-06 under the new code, one series
+    bj = ph[(ph["level_key"] == "BJ920682") & (ph["position_date"] == pd.Timestamp("2025-05-05"))]
+    assert len(bj) == 1 and bj["pnl_date"].iloc[0] == SWITCH
+
+
+def test_pnl_gate_and_invalidation_follow_each_tables_dependencies(risk_env):
+    engine, cfg = risk_env
+    risk_job.run_risk(engine, cfg, "2025-05-20", "2025-06-26")
+    pnl_job.run_pnl(engine, cfg, "2025-05-15", "2025-06-26")
+    cal = etl.trading_days(engine)
+    i = cal.get_loc(F)
+    _dq(engine, F, "DQ03")
+    # price on F feeds the P&L of F - 1 (as t + 1) and of F (as t)
+    st = pnl_job.run_pnl(engine, cfg, "2025-05-20", "2025-06-26")
+    assert st.index[st != "ok"].tolist() == [cal[i - 1], F]
+    gone = gate.invalidate(engine, cfg, F, F)
+    assert gone["pnl_hypo"].tolist() == [cal[i - 1], F]
+    assert gone["risk_result"].equals(cal[i : i + 21])
+    assert gone["var_attribution"].equals(cal[i : i + 22])  # windows of t - 1 and t
+    assert gone["backtest_result"].equals(cal[i : i + 20 + 250 + 1].intersection(cal))
+    left = set(read_frame(engine, s.pnl_hypo, date_col="position_date")["position_date"])
+    assert not left & {cal[i - 1], F} and cal[i - 2] in left and cal[i + 1] in left
+
+    _dq(engine, F, "DQ03", "pass", dt.datetime(2031, 1, 1))
+    g = cal[i + 3]
+    _dq(engine, g, "DQ07")
+    gone = gate.invalidate(engine, cfg, g, g)
+    assert gone["pnl_hypo"].tolist() == [g] and gone["risk_result"].tolist() == [g]
+    assert gone["var_attribution"].tolist() == [g, cal[i + 4]]  # positions of t - 1 and t

@@ -8,7 +8,14 @@ from mrisk.config import database_url, load_config
 from mrisk.db.repo import get_engine, init_db
 from mrisk.jobs import daily as jobs
 from mrisk.jobs import etl, gate
+from mrisk.jobs import pnl as pnl_job
 from mrisk.jobs import risk as risk_job
+
+# date-range jobs: name -> (help, run(engine, cfg, start, end) -> per-date status, no dates is an error)
+RANGE_JOBS = {
+    "risk": ("compute VaR/ES for position dates in a range and write risk_result", risk_job.run_risk, True),
+    "pnl": ("hypothetical P&L of each position date held to the next trading day -> pnl_hypo", pnl_job.run_pnl, False),
+}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -23,11 +30,12 @@ def main(argv: list[str] | None = None) -> int:
     q = sub.add_parser("dq", help="re-run DQ rules over a date range")
     q.add_argument("--start", required=True)
     q.add_argument("--end", required=True)
-    r = sub.add_parser("risk", help="compute VaR/ES for position dates in a range and write risk_result")
-    rg = r.add_mutually_exclusive_group(required=True)
-    rg.add_argument("--date")
-    rg.add_argument("--start")
-    r.add_argument("--end", help="with --start; defaults to --start")
+    for name, (help_, _, _) in RANGE_JOBS.items():
+        r = sub.add_parser(name, help=help_)
+        rg = r.add_mutually_exclusive_group(required=True)
+        rg.add_argument("--date")
+        rg.add_argument("--start")
+        r.add_argument("--end", help="with --start; defaults to --start")
     sub.add_parser("schedule", help="run the daily job every weekday at scheduler.daily_time (Asia/Shanghai)")
     args = ap.parse_args(argv)
 
@@ -50,11 +58,12 @@ def main(argv: list[str] | None = None) -> int:
         jobs._log_dq(res, blocked)
         gate.invalidate(engine, cfg, args.start, args.end)
         return 2 if len(blocked) else 0
-    if args.cmd == "risk":
+    if args.cmd in RANGE_JOBS:
         if args.end and not args.start:
             ap.error("--end requires --start")
-        status = risk_job.run_risk(engine, cfg, args.date or args.start, args.end)
-        return 2 if status.empty or (status != "ok").any() else 0
+        _, run, empty_is_error = RANGE_JOBS[args.cmd]
+        status = run(engine, cfg, args.date or args.start, args.end)
+        return 2 if (status.empty and empty_is_error) or (status != "ok").any() else 0
     if args.cmd == "schedule":
         from mrisk.jobs.scheduler import run_forever
 

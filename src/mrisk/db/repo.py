@@ -80,6 +80,18 @@ def replace_partition(engine: Engine, table: Table, df: pd.DataFrame, **eq) -> i
     return len(records)
 
 
+def replace_dates(engine: Engine, table: Table, df: pd.DataFrame, date_col: str, dates: Iterable, **eq) -> int:
+    """Delete every row on `dates` matching the equality filters, then insert df, in one transaction."""
+    days = [pd.Timestamp(d).date() for d in dates]
+    records = _to_records(table, df)
+    with engine.begin() as conn:
+        if days:
+            conn.execute(delete(table).where(table.c[date_col].in_(days), *[table.c[k] == v for k, v in eq.items()]))
+        if records:
+            conn.execute(table.insert(), records)
+    return len(records)
+
+
 def read_frame(
     engine: Engine,
     table: Table,
