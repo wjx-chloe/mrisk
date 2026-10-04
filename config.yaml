@@ -44,12 +44,15 @@ scheduler:
 
 dq:
   blocking: [DQ02, DQ03, DQ07, DQ08, DQ09, DQ11]
-  # blocking 规则的作用域（每条 blocking 规则必须且只能归一类，见 docs/week2-engine.md §8）：
-  #   price    检查行情；第 f 天失败会污染窗口含 f 的所有风险日（f 及其后 lookback_days 个交易日）
-  #   position 检查持仓或静态参考数据；只影响当天
+  # blocking 规则的作用域：按被检查的数据影响计算多久分类，每条 blocking 规则必须且只能归一类（docs/week2-engine.md §8）
+  #   price    行情，影响 lookback_days + 1 天：第 f 天失败，拦下并删除 f 及其后 lookback_days 个交易日
+  #   position 持仓，影响 1 天：只拦下并删除当天
+  #   static   静态参考数据，影响所有天：看该规则最近一次运行的结果，不看检查日期；失败则拦下并删除全部
+  # DQ11 失败分不清是持仓错还是价格错，按代价不对称归入 price
   blocking_scope:
-    price: [DQ02, DQ03]
-    position: [DQ07, DQ08, DQ09, DQ11]
+    price: [DQ02, DQ03, DQ11]
+    position: [DQ07]
+    static: [DQ08, DQ09]
   arrival_deadline: "17:00"
   mv_change_max: 0.30
   row_count_change_max: 0.05

@@ -231,11 +231,21 @@ F = pd.Timestamp("2025-05-21")
 
 def test_dq_gate_position_failure_blocks_only_that_day(risk_env):
     engine, cfg = risk_env
-    _dq(engine, F, "DQ11")
+    _dq(engine, F, "DQ07")
     dates = _cal(engine, "2025-05-20", "2025-06-27")
     gate = risk_job.dq_gate(engine, cfg, dates)
     assert gate.index[gate["status"] != "ok"].tolist() == [F]
-    assert gate.at[F, "reason"] == "position ['DQ11'] on 2025-05-21"
+    assert gate.at[F, "reason"] == "position ['DQ07'] on 2025-05-21"
+
+
+@pytest.mark.parametrize("rule", ["DQ02", "DQ03", "DQ11"])
+def test_dq_gate_price_rules_including_dq11_block_the_whole_window(risk_env, rule):
+    engine, cfg = risk_env
+    _dq(engine, F, rule)
+    cal = etl.trading_days(engine)
+    i = cal.get_loc(F)
+    gate = risk_job.dq_gate(engine, cfg, _cal(engine, "2025-05-20", "2025-06-27"))
+    assert gate.index[gate["status"] == "blocked"].equals(cal[i : i + 21])
 
 
 def test_dq_gate_price_failure_blocks_every_window_that_holds_it(risk_env):
@@ -259,7 +269,7 @@ def test_dq_gate_missing_dq_in_window_and_precedence(risk_env):
     gap = pd.Timestamp("2025-05-12")
     with engine.begin() as conn:
         conn.execute(delete(s.dq_result).where(s.dq_result.c.check_date == gap.date()))
-    _dq(engine, F, "DQ11")
+    _dq(engine, F, "DQ07")
     cal = etl.trading_days(engine)
     i = cal.get_loc(gap)
     gate = risk_job.dq_gate(engine, cfg, cal[i - 1 : i + 22])
@@ -293,7 +303,7 @@ def test_invalidate_risk_scopes_deletion_by_rule_class(risk_env):
     assert left == stored - set(cal[i : i + 21])
 
     g = pd.Timestamp("2025-06-25")
-    _dq(engine, g, "DQ11")
+    _dq(engine, g, "DQ07")
     assert risk_job.invalidate_risk(engine, cfg, g, g).tolist() == [g]
     assert set(read_frame(engine, s.risk_result)["trade_date"]) == left - {g}
     assert risk_job.invalidate_risk(engine, cfg, "2025-06-02", "2025-06-06").empty  # nothing failed there
@@ -307,11 +317,37 @@ def test_daily_skips_risk_when_window_has_an_unresolved_price_failure(risk_env, 
     assert read_frame(engine, s.risk_result).empty
 
 
+def test_static_rule_is_judged_by_its_latest_run_not_by_check_date(risk_env):
+    engine, cfg = risk_env
+    dates = _cal(engine, "2025-05-20", "2025-05-23")
+    # the latest DQ08 run (filed under 2025-06-27) fails; 2025-05-20's own DQ08 row is still the backfill's pass
+    _dq(engine, "2025-06-27", "DQ08")
+    own = read_frame(engine, s.dq_result, "2025-05-20", "2025-05-20", date_col="check_date", rule_id="DQ08")
+    assert set(own["status"]) == {"pass"}
+    gate = risk_job.dq_gate(engine, cfg, dates)
+    assert (gate["status"] == "blocked").all()
+    assert gate.at[dates[0], "reason"] == "static DQ08 failed in its latest run later-20300101"
+    # a newer DQ08 run passes, wherever it is filed: resolved for every date
+    _dq(engine, "2025-04-01", "DQ08", "pass", dt.datetime(2031, 1, 1))
+    assert (risk_job.dq_gate(engine, cfg, dates)["status"] == "ok").all()
+
+
+def test_invalidate_risk_static_failure_deletes_every_date(risk_env):
+    engine, cfg = risk_env
+    risk_job.run_risk(engine, cfg, "2025-05-20", "2025-05-30")
+    stored = set(read_frame(engine, s.risk_result)["trade_date"])
+    _dq(engine, "2025-06-27", "DQ09")
+    gone = risk_job.invalidate_risk(engine, cfg, "2025-06-27", "2025-06-27")
+    assert set(gone) == stored
+    assert read_frame(engine, s.risk_result).empty
+
+
 @pytest.mark.parametrize(
     "scope, msg",
     [
-        ({"price": ["DQ02", "DQ03"], "position": ["DQ07", "DQ08", "DQ09"]}, "must cover exactly"),
-        ({"price": ["DQ02", "DQ03", "DQ11"], "position": ["DQ07", "DQ08", "DQ09", "DQ11"]}, "both price and position"),
+        ({"price": ["DQ02", "DQ03", "DQ11"], "position": ["DQ07"], "static": ["DQ08"]}, "must cover exactly"),
+        ({"price": ["DQ02", "DQ03", "DQ11"], "position": ["DQ07", "DQ11"], "static": ["DQ08", "DQ09"]}, "both price and position"),
+        ({"price": ["DQ02", "DQ03", "DQ11", "DQ07", "DQ08", "DQ09"], "reference": []}, "unknown classes"),
     ],
 )
 def test_blocking_scope_must_classify_every_blocking_rule_once(risk_env, scope, msg):

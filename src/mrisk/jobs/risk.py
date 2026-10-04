@@ -27,18 +27,25 @@ def _check_params(cfg) -> None:
         raise ValueError(f"return_type must be one of {RETURN_TYPES}, got {cfg['return_type']!r}")
 
 
-def blocking_scope(cfg) -> tuple[list[str], list[str]]:
-    """-> (price rules, position rules) from dq.blocking_scope. Every blocking rule is in exactly one class."""
-    scope = cfg["dq"]["blocking_scope"]
-    price, position = list(scope["price"]), list(scope["position"])
-    both = set(price) & set(position)
-    if both:
-        raise ValueError(f"dq.blocking_scope: {sorted(both)} classified as both price and position")
-    if set(price) | set(position) != set(cfg["dq"]["blocking"]):
-        raise ValueError(
-            f"dq.blocking_scope {sorted(set(price) | set(position))} must cover exactly dq.blocking {sorted(cfg['dq']['blocking'])}"
-        )
-    return price, position
+SCOPES = ("price", "position", "static")
+
+
+def blocking_scope(cfg) -> dict[str, list[str]]:
+    """dq.blocking_scope -> {class: rules}. Classes follow how long the checked data feeds the calculation:
+    position 1 day, price lookback + 1 days, static reference data every day. Each blocking rule in exactly one."""
+    unknown = set(cfg["dq"]["blocking_scope"]) - set(SCOPES)
+    if unknown:
+        raise ValueError(f"dq.blocking_scope: unknown classes {sorted(unknown)}, expected {SCOPES}")
+    scope = {k: list(cfg["dq"]["blocking_scope"].get(k) or []) for k in SCOPES}
+    seen: dict[str, str] = {}
+    for k, rules in scope.items():
+        for r in rules:
+            if r in seen:
+                raise ValueError(f"dq.blocking_scope: {r} classified as both {seen[r]} and {k}")
+            seen[r] = k
+    if set(seen) != set(cfg["dq"]["blocking"]):
+        raise ValueError(f"dq.blocking_scope {sorted(seen)} must cover exactly dq.blocking {sorted(cfg['dq']['blocking'])}")
+    return scope
 
 
 def _latest_failures(engine: Engine, start, end) -> tuple[pd.DatetimeIndex, pd.DataFrame]:
@@ -49,12 +56,24 @@ def _latest_failures(engine: Engine, start, end) -> tuple[pd.DatetimeIndex, pd.D
     return pd.DatetimeIndex(latest["check_date"].unique()), latest[latest["status"] == "fail"]
 
 
+def _static_failures(engine: Engine, rules: list[str]) -> pd.DataFrame:
+    """Static rules re-check today's reference tables whatever check date they are filed under, so each is judged
+    by its most recent run overall, not per date: an old date backfilled later still carries its old pass."""
+    if not rules:
+        return pd.DataFrame(columns=["rule_id", "run_id", "created_at"])
+    res = read_frame(
+        engine, s.dq_result, date_col="check_date", rule_id=rules, columns=["rule_id", "run_id", "status", "created_at"]
+    )
+    latest = res[res["created_at"] == res.groupby("rule_id")["created_at"].transform("max")]
+    return latest.loc[latest["status"] == "fail", ["rule_id", "run_id", "created_at"]].drop_duplicates("rule_id")
+
+
 def dq_gate(engine: Engine, cfg, dates: pd.DatetimeIndex) -> pd.DataFrame:
     """Per risk date t -> [status, reason]. Position rules are checked on t only; price rules on every price
     date of t's window (the lookback + 1 trading days ending on t), since one bad price feeds every window
-    holding it. status: 'blocked' if any such failure, else 'no_dq' if a date that must be checked has no
-    DQ result, else 'ok'."""
-    price, position = blocking_scope(cfg)
+    holding it; static rules by their most recent run, for every t. status: 'blocked' if any such failure,
+    else 'no_dq' if a date that must be checked has no DQ result, else 'ok'."""
+    scope = blocking_scope(cfg)
     lookback = cfg["lookback_days"]
     cal = etl.trading_days(engine, end=dates.max())
     i = cal.get_indexer(dates)
@@ -64,8 +83,9 @@ def dq_gate(engine: Engine, cfg, dates: pd.DatetimeIndex) -> pd.DataFrame:
     if (lo < 0).any():
         raise ValueError(f"calendar holds fewer than {lookback + 1} days up to {dates[lo < 0][0].date()}")
     checked, fail = _latest_failures(engine, cal[lo.min()], dates.max())
-    px_fail = fail[fail["rule_id"].isin(price)]
-    pos_fail = fail[fail["rule_id"].isin(position)]
+    px_fail = fail[fail["rule_id"].isin(scope["price"])]
+    pos_fail = fail[fail["rule_id"].isin(scope["position"])]
+    st_fail = _static_failures(engine, scope["static"])
 
     # prefix sums over the calendar: failures / DQ results inside each window in O(1) per date
     def window_count(days: pd.DatetimeIndex) -> np.ndarray:
@@ -74,17 +94,20 @@ def dq_gate(engine: Engine, cfg, dates: pd.DatetimeIndex) -> pd.DataFrame:
 
     n_px = window_count(pd.DatetimeIndex(px_fail["check_date"]))
     n_unchecked = (lookback + 1) - window_count(checked)
-    blocked = (n_px > 0) | dates.isin(pos_fail["check_date"])
+    blocked = (n_px > 0) | dates.isin(pos_fail["check_date"]) | (len(st_fail) > 0)
 
     out = pd.DataFrame({"status": "ok", "reason": ""}, index=dates)
     out.loc[(n_unchecked > 0) & ~blocked, "status"] = "no_dq"
     out.loc[blocked, "status"] = "blocked"
+    static_reason = [f"static {r.rule_id} failed in its latest run {r.run_id}" for r in st_fail.itertuples()]
     for d, lo_d in zip(dates, cal[lo]):
         if out.at[d, "status"] == "ok":
             continue
         pf = pos_fail[pos_fail["check_date"] == d]
         xf = px_fail[(px_fail["check_date"] >= lo_d) & (px_fail["check_date"] <= d)]
-        parts = [f"position {sorted(pf['rule_id'])} on {d.date()}"] if len(pf) else []
+        parts = list(static_reason)
+        if len(pf):
+            parts.append(f"position {sorted(pf['rule_id'])} on {d.date()}")
         if len(xf):
             hits = sorted(f"{r.rule_id}@{r.check_date.date()}" for r in xf.itertuples())
             parts.append(f"price in window {lo_d.date()}..{d.date()}: {hits[:10]}{' ...' if len(hits) > 10 else ''}")
@@ -97,23 +120,35 @@ def dq_gate(engine: Engine, cfg, dates: pd.DatetimeIndex) -> pd.DataFrame:
 
 
 def invalidate_risk(engine: Engine, cfg, start, end) -> pd.DatetimeIndex:
-    """Deletes the risk_result rows that rest on data a blocking rule rejected, per the latest DQ run of each
-    check date in [start, end]: a position failure on f removes f; a price failure on f removes f and the next
-    lookback trading days (every window holding f), even beyond end. Re-run risk after the data is fixed.
-    Returns the affected dates."""
-    price, position = blocking_scope(cfg)
+    """Deletes the risk_result rows that rest on data a blocking rule rejected. A static rule failing in its most
+    recent run removes every date. Otherwise, per the latest DQ run of each check date in [start, end]: a position
+    failure on f removes f; a price failure on f removes f and the next lookback trading days (every window
+    holding f), even beyond end. Re-run risk after the data is fixed. Returns the affected dates."""
+    scope = blocking_scope(cfg)
     lookback = cfg["lookback_days"]
-    _, fail = _latest_failures(engine, start, end)
-    if fail.empty:
-        return pd.DatetimeIndex([])
-    cal = etl.trading_days(engine)
-    hit = np.zeros(len(cal) + lookback + 2, dtype=int)
-    j = cal.get_indexer(pd.DatetimeIndex(fail.loc[fail["rule_id"].isin(price), "check_date"].unique()))
-    np.add.at(hit, j, 1)
-    np.add.at(hit, j + lookback + 1, -1)
-    affected = cal[np.cumsum(hit)[: len(cal)] > 0].union(pd.DatetimeIndex(fail.loc[fail["rule_id"].isin(position), "check_date"].unique()))
     pid = cfg["portfolio"]["portfolio_id"]
     rr = s.risk_result.c
+    st_fail = _static_failures(engine, scope["static"])
+    if len(st_fail):
+        stored = read_frame(engine, s.risk_result, portfolio_id=pid, columns=["trade_date"])["trade_date"]
+        with engine.begin() as conn:
+            n = conn.execute(delete(s.risk_result).where(rr.portfolio_id == pid)).rowcount
+        log.warning(
+            "static rules %s failed in their latest run: all %d risk_result row(s) of %s deleted",
+            sorted(st_fail["rule_id"]), n, pid,
+        )
+        return pd.DatetimeIndex(sorted(stored.unique()))
+    _, fail = _latest_failures(engine, start, end)
+    cal = etl.trading_days(engine)
+    hit = np.zeros(len(cal) + lookback + 2, dtype=int)
+    j = cal.get_indexer(pd.DatetimeIndex(fail.loc[fail["rule_id"].isin(scope["price"]), "check_date"].unique()))
+    np.add.at(hit, j, 1)
+    np.add.at(hit, j + lookback + 1, -1)
+    affected = cal[np.cumsum(hit)[: len(cal)] > 0].union(
+        pd.DatetimeIndex(fail.loc[fail["rule_id"].isin(scope["position"]), "check_date"].unique())
+    )
+    if affected.empty:  # nothing failed, or only static rules whose latest run has since passed
+        return affected
     with engine.begin() as conn:
         n = conn.execute(
             delete(s.risk_result).where(rr.portfolio_id == pid, rr.trade_date.in_([d.date() for d in affected]))
