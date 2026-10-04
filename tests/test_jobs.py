@@ -282,7 +282,7 @@ def test_dq_gate_missing_dq_in_window_and_precedence(risk_env):
     assert st[cal[i - 1]] == "ok" and st[cal[i + 21]] == "ok"
     assert (st[cal[i : i + 21].drop(F)] == "no_dq").all()
     assert st[F] == "blocked"  # a known failure wins over a missing check
-    assert gt.at[gap, "reason"] == "no DQ result for 1 day(s) in window, first 2025-05-12"
+    assert gt.at[gap, "reason"] == "no DQ result for 1 day(s) the data rests on, first 2025-05-12"
 
 
 def test_run_risk_deletes_a_blocked_day_it_had_stored(risk_env, caplog):
