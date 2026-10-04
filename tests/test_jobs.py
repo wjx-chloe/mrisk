@@ -506,3 +506,41 @@ def test_backtest_job_leaves_no_result_on_windows_with_a_gap(bt_env):
     assert status.index[status == "gap"].equals(gap)
     stored = set(read_frame(engine, s.backtest_result, date_col="asof_date")["asof_date"])
     assert not stored & set(gap) and cal[i] in stored and cal[i + 16] in stored
+
+
+# ---- attribution job ------------------------------------------------------------------------------------------
+from mrisk.jobs import attribution as attribution_job  # noqa: E402
+
+
+def test_attribution_job_telescopes_to_stored_risk_changes(risk_env):
+    engine, cfg = risk_env
+    risk_job.run_risk(engine, cfg, "2025-05-19", "2025-06-27")
+    status = attribution_job.run_attribution(engine, cfg, "2025-05-20", "2025-06-27", run_id="a1")
+    assert (status == "ok").all() and len(status) == len(_cal(engine, "2025-05-20", "2025-06-27"))
+    va = read_frame(engine, s.var_attribution)
+    rr = read_frame(engine, s.risk_result, level="portfolio").set_index(["trade_date", "confidence"])
+    cal = etl.trading_days(engine)
+    port = va[(va["level"] == "portfolio") & (va["effect"] == "total")]
+    for r in port.itertuples():
+        prev = cal[cal.get_loc(r.trade_date) - 1]
+        diff = rr.at[(r.trade_date, r.confidence), r.metric] - rr.at[(prev, r.confidence), r.metric]
+        assert r.value == pytest.approx(diff, rel=1e-9, abs=1e-6)
+    # window rows name the return date that left the window: the first return of t - 1's window
+    w = va[(va["effect"] == "window") & (va["level"] == "portfolio")].drop_duplicates("trade_date").set_index("trade_date")
+    for t, d in w["window_dropped"].items():
+        assert d == cal[cal.get_loc(t) - 1 - cfg["lookback_days"] + 1]
+    # days without a trade and without a share-count change: quantity effect exactly 0
+    pos = read_frame(engine, s.position, "2025-05-19", "2025-06-27")
+    q = pos.pivot(index="trade_date", columns="instrument_id", values="quantity").fillna(0)
+    unchanged = q.index[1:][(q.diff().iloc[1:] == 0).all(axis=1).to_numpy()]
+    assert len(unchanged) > 10
+    qe = va[(va["effect"] == "quantity") & va["trade_date"].isin(unchanged)]["value"]
+    assert (qe == 0.0).all()
+
+
+def test_attribution_job_gate_uses_both_days(risk_env):
+    engine, cfg = risk_env
+    _dq(engine, F, "DQ07")  # positions of F feed the attribution of F (as t) and of the next day (as t - 1)
+    status = attribution_job.run_attribution(engine, cfg, "2025-05-20", "2025-05-23")
+    cal = etl.trading_days(engine)
+    assert status.index[status != "ok"].tolist() == [F, cal[cal.get_loc(F) + 1]]

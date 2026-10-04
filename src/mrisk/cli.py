@@ -8,6 +8,7 @@ from mrisk.config import database_url, load_config
 from mrisk.db.repo import get_engine, init_db
 from mrisk.jobs import daily as jobs
 from mrisk.jobs import etl, gate
+from mrisk.jobs import attribution as attribution_job
 from mrisk.jobs import backtest as backtest_job
 from mrisk.jobs import pnl as pnl_job
 from mrisk.jobs import risk as risk_job
@@ -20,6 +21,10 @@ RANGE_JOBS = {
     "backtest": (
         "rolling Kupiec / Christoffersen / traffic light for realisation dates in a range -> backtest_result",
         backtest_job.run_backtest, False, {"ok", "warming_up"},
+    ),
+    "attribution": (
+        "split the day-on-day change of VaR / ES into quantity, revaluation and window effects -> var_attribution",
+        attribution_job.run_attribution, False, {"ok"},
     ),
 }
 
