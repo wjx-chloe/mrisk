@@ -231,7 +231,7 @@ DQ01 对照、停牌补行、调度判断是否交易日都以此为准。
 | portfolio_id | text | |
 | metric | text | var_hs / var_param / es_hs |
 | confidence | numeric | 0.95 / 0.99 |
-| effect | text | quantity / revaluation / window / total，见 §5.3 |
+| effect | text | quantity / revaluation_scale / revaluation_drift / window / total，见 §5.3；前四项之和 = total |
 | level | text | portfolio / instrument |
 | level_key | text | 组合级为 portfolio_id，个股级为 instrument_id |
 | value | numeric | 组合级为效应值；个股级为该股的 Euler 贡献，各股之和等于组合级 |
@@ -305,18 +305,22 @@ parametric_dist: normal   # normal / t（t 为进阶）
 ### 5.3 VaR 差异归因（简化版）
 记 V(W, P) 为用收益率窗口 W、持仓市值向量 P 算出的风险指标；q 为持股数量，c 为收盘价。今日 − 昨日按顺序分解为三项：
 - **数量效应**：V(W_{t−1}, q_t · c_{t−1}) − V(W_{t−1}, q_{t−1} · c_{t−1})
-- **重估效应**：V(W_{t−1}, q_t · c_t) − V(W_{t−1}, q_t · c_{t−1})
+- **重估效应**：V(W_{t−1}, q_t · c_t) − V(W_{t−1}, q_t · c_{t−1})，再拆成两部分：
+  - 记 V1 = V(W_{t−1}, q_t · c_{t−1})，V2 = V(W_{t−1}, q_t · c_t)，λ = Σ q_t · c_t / Σ q_t · c_{t−1}
+  - **规模**：(λ − 1) · V1，即组合整体涨跌带来的变化
+  - **权重漂移**：V2 − λ · V1，即个股涨跌不同步、权重改变带来的变化；所有股票同比例涨跌时为 0
+  - 依据：三个指标都是一次齐次的，V(W, λP) = λ · V(W, P)，所以不需要额外评估
 - **窗口效应**：V(W_t, q_t · c_t) − V(W_{t−1}, q_t · c_t)，同时记下当天移出窗口的收益日期
-- 三者之和精确等于 V_t − V_{t−1}；不调仓的日子数量效应精确为 0
+- 数量、规模、权重漂移、窗口四项之和精确等于 V_t − V_{t−1}；不调仓的日子数量效应精确为 0
 - 对 var_hs、var_param、es_hs 两个置信度都做
 
 个股贡献用 Euler 分配，各股之和精确等于组合值：
 - var_hs：取决定分位数的两个情景日（线性插值的上下两天），按插值权重对个股当天损益加权；
 - es_hs：尾部各情景日个股损益的平均；
 - var_param：z_α × e_i × (Σe)_i / σ_p。
-每个效应的个股贡献 = 前后两次评估的个股分量之差。
+每个效应的个股贡献 = 前后两次评估的个股分量之差；规模和权重漂移的个股贡献分别为 (λ − 1) · 分量_i(V1) 和 分量_i(V2) − λ · 分量_i(V1)（Euler 分量同样一次齐次）。
 
-输出：组合级三项效应 + 个股级贡献（展示 top 10），写入 var_attribution。
+输出：组合级四项效应 + 个股级贡献（展示 top 10），写入 var_attribution。
 
 ### 5.4 回测
 每日用"t 日算的 VaR"对比"t → t+1 的假设损益"（pnl_hypo，组合级）：
