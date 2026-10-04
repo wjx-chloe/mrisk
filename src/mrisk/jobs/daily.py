@@ -4,6 +4,7 @@ import pandas as pd
 from sqlalchemy import Engine
 
 from mrisk.jobs import etl
+from mrisk.jobs import risk as risk_job
 
 log = logging.getLogger(__name__)
 
@@ -24,7 +25,8 @@ def backfill(engine: Engine, cfg, end=None) -> pd.DatetimeIndex:
 
 
 def daily(engine: Engine, cfg, date=None) -> pd.DatetimeIndex | None:
-    """Incremental run for one trading day. Returns blocked dates, or None if not a trading day."""
+    """Incremental run for one trading day: prices -> positions -> DQ -> risk, the last only when DQ has no
+    blocking failure. Returns the blocked dates (DQ or the risk gate), or None if not a trading day."""
     src = etl.make_source(cfg)
     etl.fetch_trade_calendar(engine, src)
     d = pd.Timestamp(date).normalize() if date else pd.Timestamp(etl.now_cst().date())
@@ -36,7 +38,11 @@ def daily(engine: Engine, cfg, date=None) -> pd.DatetimeIndex | None:
     log.info("positions: %d rows loaded", etl.load_positions(engine, cfg, path))
     res, blocked = etl.run_dq(engine, cfg, d, d, run_id=f"daily-{etl.now_cst():%Y%m%dT%H%M%S}")
     _log_dq(res, blocked)
-    return blocked
+    if len(blocked):
+        log.error("%s: blocking DQ failure, risk not computed", d.date())
+        return blocked
+    status = risk_job.run_risk(engine, cfg, d)
+    return pd.DatetimeIndex(status.index[status != "ok"])
 
 
 def _log_dq(res: pd.DataFrame, blocked: pd.DatetimeIndex) -> None:

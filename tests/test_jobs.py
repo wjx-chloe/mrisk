@@ -66,6 +66,7 @@ def env(tmp_path, monkeypatch):
     cfg["_root"] = tmp_path
     cfg["data"]["price_start"] = "2025-03-10"
     cfg["portfolio"].update(start="2025-04-01", n_holdings=6, min_industries=3, initial_capital=1e7)
+    cfg["lookback_days"] = 20  # the fake calendar holds ~80 days
     cfg["universe"].update(industries=INDS, per_industry=3, listed_before="2015-01-01")
     seed = tmp_path / "seed"
     seed.mkdir()
@@ -119,6 +120,8 @@ def test_backfill_then_daily(env, monkeypatch):
     assert read_frame(engine, s.daily_price, end="2025-06-27")["load_type"].eq("backfill").all()
     last = read_frame(engine, s.dq_result, start="2025-06-30", date_col="check_date")
     assert last.set_index("rule_id").loc["DQ10", "status"] == "pass"
+    rr = read_frame(engine, s.risk_result)
+    assert set(rr["trade_date"]) == {pd.Timestamp("2025-06-30")} and set(rr["confidence"]) == {0.95, 0.99}
 
 
 def test_daily_infers_suspension_for_held_stock_without_quote(env, monkeypatch):
@@ -148,6 +151,7 @@ def test_daily_does_not_infer_when_whole_day_missing(env, monkeypatch):
     assert len(read_frame(engine, s.position, start="2025-06-30")) == 6
     res = read_frame(engine, s.dq_result, start="2025-06-30", date_col="check_date").set_index("rule_id")["status"]
     assert res["DQ01"] == "fail" and res["DQ02"] == "fail"
+    assert read_frame(engine, s.risk_result).empty
 
 
 def test_daily_skips_non_trading_day(env):
@@ -169,7 +173,6 @@ RISK_DATE = pd.Timestamp("2025-05-20")  # a 20-return window ending here starts 
 @pytest.fixture
 def risk_env(env):
     engine, cfg = env
-    cfg["lookback_days"] = 20
     assert len(jobs.backfill(engine, cfg, end=LAST_BACKFILL)) == 0
     return engine, cfg
 

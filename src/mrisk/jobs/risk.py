@@ -51,7 +51,7 @@ def run_risk(engine: Engine, cfg, start, end=None, run_id: str | None = None) ->
     dates = pd.DatetimeIndex(sorted(pos["trade_date"].unique()))
     if dates.empty:
         log.warning("no positions for %s in %s..%s", pid, start.date(), end.date())
-        return pd.Series(dtype=object)
+        return pd.Series(dtype=object, index=pd.DatetimeIndex([]))
     cal = etl.trading_days(engine, end=dates[0])
     window_start = cal[max(0, len(cal) - 1 - lookback)]
     prices = read_frame(
