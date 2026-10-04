@@ -186,7 +186,7 @@ def test_risk_job_writes_all_levels_and_bj_series_is_continuous_across_920_switc
     pos = read_frame(engine, s.position, RISK_DATE, RISK_DATE)
     n_ind = read_frame(engine, s.instrument, date_col="list_date").set_index("instrument_id").loc[pos["instrument_id"], "industry_l1"].nunique()
     assert len(rr) == (1 + n_ind + len(pos)) * 2
-    assert set(rr["confidence"]) == {0.95, 0.99} and set(rr["run_id"]) == {"r1"} and rr["pnl_actual"].isna().all()
+    assert set(rr["confidence"]) == {0.95, 0.99} and set(rr["run_id"]) == {"r1"}
     assert rr.loc[rr["level"] == "portfolio", "market_value"].iloc[0] == pytest.approx((pos["quantity"] * read_frame(
         engine, s.daily_price, RISK_DATE, RISK_DATE).set_index("instrument_id").loc[pos["instrument_id"], "close"].to_numpy()).sum())
     assert "BJ920682" in set(rr["level_key"]) and not rr["level_key"].str.contains("834682").any()

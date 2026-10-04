@@ -100,7 +100,6 @@ risk_result = Table(
     Column("var_hs", Float),
     Column("var_param", Float),
     Column("es_hs", Float),
-    Column("pnl_actual", Float),
     Column("run_id", Text, nullable=False),
     PrimaryKeyConstraint("trade_date", "portfolio_id", "level", "level_key", "confidence"),
     CheckConstraint("level IN ('portfolio','industry','instrument')", name="ck_risk_level"),
@@ -169,4 +168,60 @@ scenario = Table(
     Column("type", Text, nullable=False),
     Column("definition", JsonType, nullable=False),
     CheckConstraint("type IN ('historical','hypothetical')", name="ck_scenario_type"),
+)
+
+
+pnl_hypo = Table(
+    "pnl_hypo",
+    metadata,
+    Column("position_date", Date, nullable=False),
+    Column("pnl_date", Date, nullable=False),
+    Column("portfolio_id", Text, nullable=False),
+    Column("level", Text, nullable=False),
+    Column("level_key", Text, nullable=False),
+    Column("market_value", Float, nullable=False),
+    Column("pnl", Float, nullable=False),
+    Column("run_id", Text, nullable=False),
+    PrimaryKeyConstraint("position_date", "portfolio_id", "level", "level_key"),
+    CheckConstraint("level IN ('portfolio','industry','instrument')", name="ck_pnl_level"),
+)
+
+backtest_result = Table(
+    "backtest_result",
+    metadata,
+    Column("asof_date", Date, nullable=False),
+    Column("portfolio_id", Text, nullable=False),
+    Column("method", Text, nullable=False),
+    Column("confidence", Float, nullable=False),
+    Column("window_days", Integer, nullable=False),
+    Column("n_obs", Integer, nullable=False),
+    Column("n_exceptions", Integer, nullable=False),
+    Column("lr_pof", Float, nullable=False),
+    Column("p_value_pof", Float, nullable=False),
+    Column("lr_ind", Float, nullable=False),
+    Column("p_value_ind", Float, nullable=False),
+    Column("zone", Text),
+    Column("run_id", Text, nullable=False),
+    PrimaryKeyConstraint("asof_date", "portfolio_id", "method", "confidence", "window_days"),
+    CheckConstraint("method IN ('hs','param')", name="ck_backtest_method"),
+    CheckConstraint("zone IS NULL OR zone IN ('green','yellow','red')", name="ck_backtest_zone"),
+)
+
+var_attribution = Table(
+    "var_attribution",
+    metadata,
+    Column("trade_date", Date, nullable=False),
+    Column("portfolio_id", Text, nullable=False),
+    Column("metric", Text, nullable=False),
+    Column("confidence", Float, nullable=False),
+    Column("effect", Text, nullable=False),
+    Column("level", Text, nullable=False),
+    Column("level_key", Text, nullable=False),
+    Column("value", Float, nullable=False),
+    Column("window_dropped", Date),
+    Column("run_id", Text, nullable=False),
+    PrimaryKeyConstraint("trade_date", "portfolio_id", "metric", "confidence", "effect", "level", "level_key"),
+    CheckConstraint("metric IN ('var_hs','var_param','es_hs')", name="ck_attr_metric"),
+    CheckConstraint("effect IN ('quantity','revaluation','window','total')", name="ck_attr_effect"),
+    CheckConstraint("level IN ('portfolio','instrument')", name="ck_attr_level"),
 )
