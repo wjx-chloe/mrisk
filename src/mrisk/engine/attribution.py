@@ -1,9 +1,12 @@
 """VaR change attribution (SPEC §5.3): quantity -> revaluation -> window, with Euler per-name contributions.
 
-V(W, P) is a risk measure on return window W with market-value vector P; q quantities, c closes:
+V(W, P) is a risk measure on return window W with market-value vector P; q quantities, c closes, f = adj / close
+the backward-adjustment factor, and q~_t = q_t f_{t-1} / f_t today's shares restated on yesterday's share basis, so
+that bonus shares and reinvested dividends are not counted as trades (a ratio within 1e-9 of 1 is taken as 1):
     V0 = V(W_{t-1}, q_{t-1} c_{t-1})   yesterday's figure
-    V1 = V(W_{t-1}, q_t     c_{t-1})   quantity effect   = V1 - V0
-    V2 = V(W_{t-1}, q_t     c_t)       revaluation effect = V2 - V1, split with lambda = sum(P2) / sum(P1):
+    V1 = V(W_{t-1}, q~_t    c_{t-1})   quantity effect   = V1 - V0  (net buying on a total-return basis)
+    V2 = V(W_{t-1}, q_t     c_t)       revaluation effect = V2 - V1 (total-return price move), split with
+                                         lambda = sum(P2) / sum(P1):
                                          scale (lambda - 1) V1, weight drift V2 - lambda V1
     V3 = V(W_t,     q_t     c_t)       window effect     = V3 - V2   (today's figure)
 The split needs no extra evaluation because every measure is homogeneous of degree 1, V(W, lambda P) = lambda V(W, P),
@@ -18,6 +21,7 @@ from mrisk.engine.returns import returns_window
 from mrisk.engine.var import hs_es, hs_var, param_var
 
 METRICS = ("var_hs", "var_param", "es_hs")
+FACTOR_TOL = 1e-9  # same tolerance as DQ05 for "the adjustment factor did not change"
 EFFECTS = ("quantity", "revaluation_scale", "revaluation_drift", "window", "total")
 
 
@@ -98,10 +102,15 @@ def attribute_change(
     c0, c1, q0, q1 = closes(prev), closes(asof), qty(positions_prev), qty(positions_cur)
     if not (q1 > 0).any():
         raise ValueError(f"no positions on {asof.date()}")
-    lam = float((q1 * c1).sum() / (q1 * c0).sum())  # portfolio-wide price relative from t - 1 to t
+    f0 = wide["adj_close"].loc[prev, ids].to_numpy(dtype=float) / c0
+    f1 = wide["adj_close"].loc[asof, ids].to_numpy(dtype=float) / c1
+    ratio = f0 / f1
+    ratio = np.where(np.abs(ratio - 1.0) <= FACTOR_TOL, 1.0, ratio)  # adj / close jitters by an ulp off ex-dates
+    q1_adj = q1 * ratio  # today's shares on yesterday's share basis
+    lam = float((q1 * c1).sum() / (q1_adj * c0).sum())  # portfolio-wide total-return relative from t - 1 to t
     evals = [
         risk_components(R0.to_numpy(), q0 * c0, conf),
-        risk_components(R0.to_numpy(), q1 * c0, conf),
+        risk_components(R0.to_numpy(), q1_adj * c0, conf),
         risk_components(R0.to_numpy(), q1 * c1, conf),
         risk_components(R1.to_numpy(), q1 * c1, conf),
     ]

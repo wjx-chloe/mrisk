@@ -8,15 +8,16 @@ from mrisk.engine.var import hs_es, hs_var, param_var
 
 # ---- hand-computed: 2 names, T = 4, 95% (linear quantile position 0.05 x 3 = 0.15) ----------------------------
 D = pd.bdate_range("2025-01-06", periods=7)  # returns r1..r6 on D1..D6; t - 1 = D5, t = D6
-RET = {"A": [0.0, -0.10, 0.02, -0.04, 0.01, -0.02], "B": [0.0, 0.01, -0.06, 0.03, -0.02, 0.04]}
-CLOSE = {"A": {D[5]: 10.0, D[6]: 10.5}, "B": {D[5]: 20.0, D[6]: 19.0}}
+RET = {"A": [0.0, -0.10, 0.02, -0.04, 0.01, -0.02], "B": [0.0, 0.01, -0.06, 0.03, -0.02, -0.03]}
+CLOSE_T1 = {"A": 10.0, "B": 20.0}  # closes on t - 1
 
 
-def _prices():
+def _prices(ret=RET):
+    """Closes move with adj_close (a constant factor per name, no corporate action) and equal CLOSE_T1 on D5."""
     rows = []
-    for iid, r in RET.items():
+    for iid, r in ret.items():
         adj = 50.0 * np.concatenate([[1.0], np.cumprod(1 + np.array(r))])
-        close = [CLOSE[iid].get(d, 10.0) for d in D]
+        close = adj * (CLOSE_T1[iid] / adj[5])
         rows.append(pd.DataFrame({"trade_date": D, "instrument_id": iid, "close": close, "adj_close": adj, "is_suspended": False}))
     return pd.concat(rows, ignore_index=True)
 
@@ -26,38 +27,41 @@ Q1 = pd.DataFrame({"instrument_id": ["A", "B"], "quantity": [100.0, 200.0]})  # 
 
 
 def test_attribution_hand_computed():
-    # P0 = q0 c0 = (1000, 2000); P1 = q1 c0 = (1000, 4000); P2 = q1 c1 = (1050, 3800); W0 = r2..r5, W1 = r3..r6
+    # c0 = (10, 20), c1 = c0 x (1 + r6) = (9.8, 19.4); no corporate action, so q~_t = q_t
+    # P0 = (1000, 2000); P1 = q~1 c0 = (1000, 4000); P2 = q1 c1 = (980, 3880); W0 = r2..r5, W1 = r3..r6
     # scenario P&L (A + B):
-    #   V0 on W0: r2 -100+20=-80  r3 20-120=-100  r4 -40+60=20   r5 10-40=-30   -> lo r3, hi r2
-    #   V1 on W0: r2 -100+40=-60  r3 20-240=-220  r4 -40+120=80  r5 10-80=-70   -> lo r3, hi r5
-    #   V2 on W0: r2 -105+38=-67  r3 21-228=-207  r4 -42+114=72  r5 10.5-76=-65.5 -> lo r3, hi r2
-    #   V3 on W1: r3 -207  r4 72  r5 -65.5  r6 -21+152=131                     -> lo r3, hi r5
+    #   V0 on W0: r2 -100+20=-80  r3 20-120=-100  r4 -40+60=20  r5 10-40=-30            -> lo r3, hi r2
+    #   V1 on W0: r2 -100+40=-60  r3 20-240=-220  r4 -40+120=80 r5 10-80=-70            -> lo r3, hi r5
+    #   V2 on W0: r2 -98+38.8=-59.2  r3 19.6-232.8=-213.2  r4 -39.2+116.4=77.2  r5 9.8-77.6=-67.8 -> lo r3, hi r5
+    #   V3 on W1: r3 -213.2  r4 77.2  r5 -67.8  r6 -19.6-116.4=-136                     -> lo r3, hi r6
     # VaR95 = -(x_lo + 0.15 (x_hi - x_lo)):
-    #   V0 = 100 - 0.15 x 20 = 97 ; V1 = 220 - 0.15 x 150 = 197.5 ; V2 = 207 - 0.15 x 140 = 186 ; V3 = 207 - 0.15 x 141.5 = 185.775
-    # effects: quantity 100.5, revaluation -11.5, window -0.225, total 88.775
-    # revaluation split, lambda = (1050 + 3800) / (1000 + 4000) = 0.97:
-    #   scale (0.97 - 1) x 197.5 = -5.925 ; drift 186 - 0.97 x 197.5 = -5.575
-    #   A: scale -0.03 x -18.5 = 0.555, drift -2.1 + 0.97 x 18.5 = 15.845 ; B: scale -0.03 x 216 = -6.48, drift 188.1 - 209.52 = -21.42
+    #   V0 = 100 - 0.15 x 20 = 97 ; V1 = 220 - 0.15 x 150 = 197.5
+    #   V2 = 213.2 - 0.15 x 145.4 = 191.39 ; V3 = 213.2 - 0.15 x 77.2 = 201.62
+    # lambda = (980 + 3880) / (1000 + 4000) = 0.972
+    # effects: quantity 100.5 ; scale -0.028 x 197.5 = -5.53 ; drift 191.39 - 0.972 x 197.5 = -0.58 ;
+    #          window 201.62 - 191.39 = 10.23 ; total 104.62
     # Euler, -(0.85 x name P&L on lo + 0.15 x name P&L on hi):
-    #   A: V0 -(17 - 15) = -2 ; V1 -(17 + 1.5) = -18.5 ; V2 -(17.85 - 15.75) = -2.1 ; V3 -(17.85 + 1.575) = -19.425
-    #   B: V0 -(-102 + 3) = 99 ; V1 -(-204 - 12) = 216 ; V2 -(-193.8 + 5.7) = 188.1 ; V3 -(-193.8 - 11.4) = 205.2
-    # ES95 (tail strictly below -VaR is the worst day only): V0 100, V1 220, V2 207, V3 207
+    #   A: V0 -(17 - 15) = -2 ; V1 -(17 + 1.5) = -18.5 ; V2 -(16.66 + 1.47) = -18.13 ; V3 -(16.66 - 2.94) = -13.72
+    #   B: V0 -(-102 + 3) = 99 ; V1 -(-204 - 12) = 216 ; V2 -(-197.88 - 11.64) = 209.52 ; V3 -(-197.88 - 17.46) = 215.34
+    #   A: quantity -16.5, scale 0.518, drift -18.13 + 0.972 x 18.5 = -0.148, window 4.41, total -11.72
+    #   B: quantity 117, scale -6.048, drift 209.52 - 0.972 x 216 = -0.432, window 5.82, total 116.34
+    # ES95 (tail strictly below -VaR is the worst day only): V0 100, V1 220, V2 213.2, V3 213.2
     out = attribute_change(Q0, Q1, _prices(), D[5], D[6], "P", [0.95], 4)
     v = out[out["metric"] == "var_hs"].set_index(["effect", "level_key"])["value"]
     exp = {
-        ("quantity", "P"): 100.5, ("revaluation_scale", "P"): -5.925, ("revaluation_drift", "P"): -5.575,
-        ("window", "P"): -0.225, ("total", "P"): 88.775,
-        ("quantity", "A"): -16.5, ("revaluation_scale", "A"): 0.555, ("revaluation_drift", "A"): 15.845,
-        ("window", "A"): -17.325, ("total", "A"): -17.425,
-        ("quantity", "B"): 117.0, ("revaluation_scale", "B"): -6.48, ("revaluation_drift", "B"): -21.42,
-        ("window", "B"): 17.1, ("total", "B"): 106.2,
+        ("quantity", "P"): 100.5, ("revaluation_scale", "P"): -5.53, ("revaluation_drift", "P"): -0.58,
+        ("window", "P"): 10.23, ("total", "P"): 104.62,
+        ("quantity", "A"): -16.5, ("revaluation_scale", "A"): 0.518, ("revaluation_drift", "A"): -0.148,
+        ("window", "A"): 4.41, ("total", "A"): -11.72,
+        ("quantity", "B"): 117.0, ("revaluation_scale", "B"): -6.048, ("revaluation_drift", "B"): -0.432,
+        ("window", "B"): 5.82, ("total", "B"): 116.34,
     }
     for key, val in exp.items():
         assert v[key] == pytest.approx(val, abs=5e-5), key
     es = out[(out["metric"] == "es_hs") & (out["level"] == "portfolio")].set_index("effect")["value"]
-    # ES revaluation 207 - 220 = -13: scale -0.03 x 220 = -6.6, drift 207 - 0.97 x 220 = -6.4
+    # ES revaluation 213.2 - 220 = -6.8: scale -0.028 x 220 = -6.16, drift 213.2 - 0.972 x 220 = -0.64
     assert es.to_dict() == pytest.approx(
-        {"quantity": 120.0, "revaluation_scale": -6.6, "revaluation_drift": -6.4, "window": 0.0, "total": 107.0}, abs=5e-5
+        {"quantity": 120.0, "revaluation_scale": -6.16, "revaluation_drift": -0.64, "window": 0.0, "total": 113.2}, abs=5e-5
     )
     w = out[out["effect"] == "window"]
     assert (w["window_dropped"] == D[2]).all() and out.loc[out["effect"] != "window", "window_dropped"].isna().all()
@@ -102,10 +106,8 @@ def test_quantity_effect_is_exactly_zero_without_rebalancing():
 
 
 def test_weight_drift_is_zero_when_every_name_moves_alike():
-    prices = _prices()
-    up = prices["trade_date"] == D[6]
-    prices.loc[up, "close"] = prices.loc[up, "instrument_id"].map({"A": 10.0, "B": 20.0}) * 1.037  # +3.7% each
-    out = attribute_change(Q0, Q1, prices, D[5], D[6], "P", [0.95, 0.99], 4)
+    ret = {k: v[:-1] + [0.037] for k, v in RET.items()}  # every name +3.7% on t, close and adj_close alike
+    out = attribute_change(Q0, Q1, _prices(ret), D[5], D[6], "P", [0.95, 0.99], 4)
     v = out.set_index(["metric", "confidence", "effect", "level_key"])["value"]
     for m in ("var_hs", "var_param", "es_hs"):
         for c in (0.95, 0.99):
@@ -125,6 +127,46 @@ def test_measures_are_homogeneous_of_degree_one():
     for m in tot:
         np.testing.assert_allclose(tot2[m], 1.37 * tot[m], rtol=1e-12)
         np.testing.assert_allclose(comp2[m], 1.37 * comp[m], rtol=1e-11)
+
+
+def _one_name(close, factor):
+    """Single name over D0..D5 (lookback 4: t - 1 = D4, t = D5); returns r1..r4 on the closes up to D4."""
+    rows = pd.DataFrame({"trade_date": D[:6], "instrument_id": "A", "close": close, "is_suspended": False})
+    rows["adj_close"] = rows["close"] * np.asarray(factor)
+    return rows
+
+
+def test_pure_bonus_issue_is_not_a_trade():
+    # 10-for-10 on D5, no trade: shares 1000 -> 2000, close halves, factor 1 -> 2, so q~_t = 2000 x 1/2 = 1000
+    close = [10.0, 9.0, 9.18, 8.8128, 8.901, 4.6]
+    factor = [1.0, 1.0, 1.0, 1.0, 1.0, 2.0]
+    prices = _one_name(close, factor)
+    q0 = pd.DataFrame({"instrument_id": ["A"], "quantity": [1000.0]})
+    q1 = pd.DataFrame({"instrument_id": ["A"], "quantity": [2000.0]})
+    out = attribute_change(q0, q1, prices, D[4], D[5], "P", [0.95, 0.99], 4)
+    assert (out[out["effect"] == "quantity"]["value"] == 0.0).all()
+    # the move is all revaluation: lambda = 2000 x 4.6 / (1000 x 8.901), a -(1 - 9200/8901) total return
+    # VaR95 of t - 1 = 809.991 = 0.091 x 8901 (see the dividend test below) ; scale = (lambda - 1) x 809.991
+    #   = (9200 - 8901) / 8901 x 0.091 x 8901 = 0.091 x 299 = 27.209
+    v = out[(out["metric"] == "var_hs") & (out["level"] == "portfolio") & (out["confidence"] == 0.95)].set_index("effect")["value"]
+    assert v["revaluation_scale"] == pytest.approx((9200 / 8901 - 1) * 809.991, rel=1e-9)
+    assert v["revaluation_scale"] == pytest.approx(27.209, abs=5e-5)
+
+
+def test_small_cash_dividend_not_reinvested_is_a_net_sale():
+    # one name, q = 1000 both days (the dividend rounded to less than half a lot), factor 1.00 -> 1.02
+    # window of t - 1 (r1..r4): closes 10, 9, 9.18, 8.8128, 8.901 -> r = -0.10, +0.02, -0.04, +0.01
+    # P0 = 1000 x 8.901 = 8901 ; scenario P&L: -890.1, 178.02, -356.04, 89.01
+    # VaR95 = -(x1 + 0.15 (x2 - x1)) = 890.1 - 0.15 x (890.1 - 356.04) = 890.1 - 80.109 = 809.991
+    # q~_t = 1000 x 1.00 / 1.02 ; quantity effect = VaR0 x (1/1.02 - 1) = 809.991 x (-0.0196078) = -15.8822
+    close = [10.0, 9.0, 9.18, 8.8128, 8.901, 8.80]
+    factor = [1.0, 1.0, 1.0, 1.0, 1.0, 1.02]
+    prices = _one_name(close, factor)
+    q = pd.DataFrame({"instrument_id": ["A"], "quantity": [1000.0]})
+    out = attribute_change(q, q, prices, D[4], D[5], "P", [0.95], 4)
+    v = out[(out["metric"] == "var_hs") & (out["level"] == "portfolio")].set_index("effect")["value"]
+    assert v["quantity"] == pytest.approx(-15.8822, abs=5e-5)
+    assert v["quantity"] == pytest.approx(809.991 * (1 / 1.02 - 1), rel=1e-12)
 
 
 def test_risk_components_sum_to_engine_totals():
