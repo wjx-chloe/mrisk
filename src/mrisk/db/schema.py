@@ -115,11 +115,11 @@ limit_rule = Table(
     Column("operator", Text, nullable=False),
     Column("threshold", Float, nullable=False),
     Column("threshold_type", Text, nullable=False),
-    Column("severity", Text, nullable=False),
+    Column("warn_ratio", Float, nullable=False),
     Column("is_active", Boolean, nullable=False),
     CheckConstraint("operator IN ('<=','<')", name="ck_limit_operator"),
     CheckConstraint("threshold_type IN ('absolute','pct_of_mv')", name="ck_limit_threshold_type"),
-    CheckConstraint("severity IN ('warn','breach')", name="ck_limit_severity"),
+    CheckConstraint("warn_ratio > 0 AND warn_ratio <= 1", name="ck_limit_warn_ratio"),
 )
 
 limit_check = Table(
@@ -129,9 +129,11 @@ limit_check = Table(
     Column("rule_id", Text, ForeignKey("limit_rule.rule_id"), nullable=False),
     Column("actual_value", Float),
     Column("threshold", Float),
+    Column("warn_threshold", Float),
     Column("status", Text, nullable=False),
+    Column("detail", JsonType),
     PrimaryKeyConstraint("trade_date", "rule_id"),
-    CheckConstraint("status IN ('ok','warn','breach')", name="ck_limit_check_status"),
+    CheckConstraint("status IN ('ok','warn','breach','no_data')", name="ck_limit_check_status"),
 )
 
 dq_rule = Table(
@@ -226,4 +228,31 @@ var_attribution = Table(
         "effect IN ('quantity','revaluation_scale','revaluation_drift','window','total')", name="ck_attr_effect"
     ),
     CheckConstraint("level IN ('portfolio','instrument')", name="ck_attr_level"),
+)
+
+stress_result = Table(
+    "stress_result",
+    metadata,
+    Column("trade_date", Date, nullable=False),
+    Column("portfolio_id", Text, nullable=False),
+    Column("scenario_id", Text, ForeignKey("scenario.scenario_id"), nullable=False),
+    Column("level", Text, nullable=False),
+    Column("level_key", Text, nullable=False),
+    Column("market_value", Float, nullable=False),
+    Column("pnl", Float, nullable=False),
+    Column("max_daily_loss", Float),
+    Column("proxy_mv_unlisted", Float, nullable=False),
+    Column("proxy_mv_suspended", Float, nullable=False),
+    Column("pnl_proxy", Float, nullable=False),
+    Column("run_id", Text, nullable=False),
+    PrimaryKeyConstraint("trade_date", "portfolio_id", "scenario_id", "level", "level_key"),
+    CheckConstraint("level IN ('portfolio','industry','instrument')", name="ck_stress_level"),
+)
+
+scenario_price_date = Table(
+    "scenario_price_date",
+    metadata,
+    Column("scenario_id", Text, ForeignKey("scenario.scenario_id"), nullable=False),
+    Column("price_date", Date, nullable=False),
+    PrimaryKeyConstraint("scenario_id", "price_date"),
 )
