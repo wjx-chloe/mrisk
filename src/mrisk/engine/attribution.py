@@ -3,10 +3,12 @@
 V(W, P) is a risk measure on return window W with market-value vector P; q quantities, c closes:
     V0 = V(W_{t-1}, q_{t-1} c_{t-1})   yesterday's figure
     V1 = V(W_{t-1}, q_t     c_{t-1})   quantity effect   = V1 - V0
-    V2 = V(W_{t-1}, q_t     c_t)       revaluation effect = V2 - V1
+    V2 = V(W_{t-1}, q_t     c_t)       revaluation effect = V2 - V1, split with lambda = sum(P2) / sum(P1):
+                                         scale (lambda - 1) V1, weight drift V2 - lambda V1
     V3 = V(W_t,     q_t     c_t)       window effect     = V3 - V2   (today's figure)
-The effects telescope to V3 - V0 exactly. Each V is evaluated by its own call on the same code path, so an
-unchanged input gives a bit-identical V and the effect is exactly 0."""
+The split needs no extra evaluation because every measure is homogeneous of degree 1, V(W, lambda P) = lambda V(W, P),
+and so are its Euler components. The four effects telescope to V3 - V0. Each V is evaluated by its own call on the
+same code path, so an unchanged input gives a bit-identical V and the quantity effect is exactly 0."""
 
 import numpy as np
 import pandas as pd
@@ -16,7 +18,7 @@ from mrisk.engine.returns import returns_window
 from mrisk.engine.var import hs_es, hs_var, param_var
 
 METRICS = ("var_hs", "var_param", "es_hs")
-EFFECTS = ("quantity", "revaluation", "window", "total")
+EFFECTS = ("quantity", "revaluation_scale", "revaluation_drift", "window", "total")
 
 
 def risk_components(R: np.ndarray, e: np.ndarray, confidence) -> tuple[dict, dict]:
@@ -94,19 +96,27 @@ def attribute_change(
         return q
 
     c0, c1, q0, q1 = closes(prev), closes(asof), qty(positions_prev), qty(positions_cur)
+    if not (q1 > 0).any():
+        raise ValueError(f"no positions on {asof.date()}")
+    lam = float((q1 * c1).sum() / (q1 * c0).sum())  # portfolio-wide price relative from t - 1 to t
     evals = [
         risk_components(R0.to_numpy(), q0 * c0, conf),
         risk_components(R0.to_numpy(), q1 * c0, conf),
         risk_components(R0.to_numpy(), q1 * c1, conf),
         risk_components(R1.to_numpy(), q1 * c1, conf),
     ]
-    steps = {"quantity": (1, 0), "revaluation": (2, 1), "window": (3, 2), "total": (3, 0)}
     dropped = R0.index[0]
     rows = []
     for metric in METRICS:
-        for effect, (b, a) in steps.items():
-            tot = evals[b][0][metric] - evals[a][0][metric]
-            comp = evals[b][1][metric] - evals[a][1][metric]
+        (v0, k0), (v1, k1), (v2, k2), (v3, k3) = ((tot[metric], comp[metric]) for tot, comp in evals)
+        steps = {
+            "quantity": (v1 - v0, k1 - k0),
+            "revaluation_scale": ((lam - 1) * v1, (lam - 1) * k1),
+            "revaluation_drift": (v2 - lam * v1, k2 - lam * k1),
+            "window": (v3 - v2, k3 - k2),
+            "total": (v3 - v0, k3 - k0),
+        }
+        for effect, (tot, comp) in steps.items():
             for ci, c in enumerate(conf):
                 wd = dropped if effect == "window" else pd.NaT
                 rows.append((metric, c, effect, "portfolio", portfolio_id, tot[ci], wd))

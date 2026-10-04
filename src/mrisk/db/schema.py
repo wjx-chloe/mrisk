@@ -222,6 +222,8 @@ var_attribution = Table(
     Column("run_id", Text, nullable=False),
     PrimaryKeyConstraint("trade_date", "portfolio_id", "metric", "confidence", "effect", "level", "level_key"),
     CheckConstraint("metric IN ('var_hs','var_param','es_hs')", name="ck_attr_metric"),
-    CheckConstraint("effect IN ('quantity','revaluation','window','total')", name="ck_attr_effect"),
+    CheckConstraint(
+        "effect IN ('quantity','revaluation_scale','revaluation_drift','window','total')", name="ck_attr_effect"
+    ),
     CheckConstraint("level IN ('portfolio','instrument')", name="ck_attr_level"),
 )

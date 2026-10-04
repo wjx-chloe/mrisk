@@ -35,6 +35,9 @@ def test_attribution_hand_computed():
     # VaR95 = -(x_lo + 0.15 (x_hi - x_lo)):
     #   V0 = 100 - 0.15 x 20 = 97 ; V1 = 220 - 0.15 x 150 = 197.5 ; V2 = 207 - 0.15 x 140 = 186 ; V3 = 207 - 0.15 x 141.5 = 185.775
     # effects: quantity 100.5, revaluation -11.5, window -0.225, total 88.775
+    # revaluation split, lambda = (1050 + 3800) / (1000 + 4000) = 0.97:
+    #   scale (0.97 - 1) x 197.5 = -5.925 ; drift 186 - 0.97 x 197.5 = -5.575
+    #   A: scale -0.03 x -18.5 = 0.555, drift -2.1 + 0.97 x 18.5 = 15.845 ; B: scale -0.03 x 216 = -6.48, drift 188.1 - 209.52 = -21.42
     # Euler, -(0.85 x name P&L on lo + 0.15 x name P&L on hi):
     #   A: V0 -(17 - 15) = -2 ; V1 -(17 + 1.5) = -18.5 ; V2 -(17.85 - 15.75) = -2.1 ; V3 -(17.85 + 1.575) = -19.425
     #   B: V0 -(-102 + 3) = 99 ; V1 -(-204 - 12) = 216 ; V2 -(-193.8 + 5.7) = 188.1 ; V3 -(-193.8 - 11.4) = 205.2
@@ -42,14 +45,20 @@ def test_attribution_hand_computed():
     out = attribute_change(Q0, Q1, _prices(), D[5], D[6], "P", [0.95], 4)
     v = out[out["metric"] == "var_hs"].set_index(["effect", "level_key"])["value"]
     exp = {
-        ("quantity", "P"): 100.5, ("revaluation", "P"): -11.5, ("window", "P"): -0.225, ("total", "P"): 88.775,
-        ("quantity", "A"): -16.5, ("revaluation", "A"): 16.4, ("window", "A"): -17.325, ("total", "A"): -17.425,
-        ("quantity", "B"): 117.0, ("revaluation", "B"): -27.9, ("window", "B"): 17.1, ("total", "B"): 106.2,
+        ("quantity", "P"): 100.5, ("revaluation_scale", "P"): -5.925, ("revaluation_drift", "P"): -5.575,
+        ("window", "P"): -0.225, ("total", "P"): 88.775,
+        ("quantity", "A"): -16.5, ("revaluation_scale", "A"): 0.555, ("revaluation_drift", "A"): 15.845,
+        ("window", "A"): -17.325, ("total", "A"): -17.425,
+        ("quantity", "B"): 117.0, ("revaluation_scale", "B"): -6.48, ("revaluation_drift", "B"): -21.42,
+        ("window", "B"): 17.1, ("total", "B"): 106.2,
     }
     for key, val in exp.items():
         assert v[key] == pytest.approx(val, abs=5e-5), key
     es = out[(out["metric"] == "es_hs") & (out["level"] == "portfolio")].set_index("effect")["value"]
-    assert es.to_dict() == pytest.approx({"quantity": 120.0, "revaluation": -13.0, "window": 0.0, "total": 107.0}, abs=5e-5)
+    # ES revaluation 207 - 220 = -13: scale -0.03 x 220 = -6.6, drift 207 - 0.97 x 220 = -6.4
+    assert es.to_dict() == pytest.approx(
+        {"quantity": 120.0, "revaluation_scale": -6.6, "revaluation_drift": -6.4, "window": 0.0, "total": 107.0}, abs=5e-5
+    )
     w = out[out["effect"] == "window"]
     assert (w["window_dropped"] == D[2]).all() and out.loc[out["effect"] != "window", "window_dropped"].isna().all()
 
@@ -73,7 +82,7 @@ def test_effects_telescope_and_contributions_sum():
     np.testing.assert_allclose(inst.reindex(port.index), port, rtol=1e-9, atol=1e-6)
     for m in ("var_hs", "var_param", "es_hs"):
         for c in conf:
-            parts = sum(port[(m, c, e)] for e in ("quantity", "revaluation", "window"))
+            parts = sum(port[(m, c, e)] for e in ("quantity", "revaluation_scale", "revaluation_drift", "window"))
             assert parts == pytest.approx(port[(m, c, "total")], rel=1e-12, abs=1e-9)
     # total = today's figure - yesterday's figure as compute_risk reports them
     inst_tbl = pd.DataFrame({"instrument_id": ids, "industry_l1": "X"})
@@ -90,6 +99,32 @@ def test_quantity_effect_is_exactly_zero_without_rebalancing():
     out = attribute_change(Q0, Q0, _prices(), D[5], D[6], "P", [0.95, 0.99], 4)
     q = out[out["effect"] == "quantity"]["value"]
     assert (q == 0.0).all()  # exactly, not approximately
+
+
+def test_weight_drift_is_zero_when_every_name_moves_alike():
+    prices = _prices()
+    up = prices["trade_date"] == D[6]
+    prices.loc[up, "close"] = prices.loc[up, "instrument_id"].map({"A": 10.0, "B": 20.0}) * 1.037  # +3.7% each
+    out = attribute_change(Q0, Q1, prices, D[5], D[6], "P", [0.95, 0.99], 4)
+    v = out.set_index(["metric", "confidence", "effect", "level_key"])["value"]
+    for m in ("var_hs", "var_param", "es_hs"):
+        for c in (0.95, 0.99):
+            scale = v[(m, c, "revaluation_scale", "P")]
+            assert scale != 0.0
+            assert v[(m, c, "revaluation_drift", "P")] == pytest.approx(0.0, abs=1e-9 * abs(scale) / 0.037)
+            for iid in ("A", "B"):
+                assert v[(m, c, "revaluation_drift", iid)] == pytest.approx(0.0, abs=1e-9 * abs(scale) / 0.037)
+
+
+def test_measures_are_homogeneous_of_degree_one():
+    rng = np.random.default_rng(4)
+    R = rng.standard_t(4, (250, 6)) * 0.02
+    e = rng.uniform(1e5, 1e6, 6)
+    tot, comp = risk_components(R, e, [0.95, 0.99])
+    tot2, comp2 = risk_components(R, 1.37 * e, [0.95, 0.99])
+    for m in tot:
+        np.testing.assert_allclose(tot2[m], 1.37 * tot[m], rtol=1e-12)
+        np.testing.assert_allclose(comp2[m], 1.37 * comp[m], rtol=1e-11)
 
 
 def test_risk_components_sum_to_engine_totals():
