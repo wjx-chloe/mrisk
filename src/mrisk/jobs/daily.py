@@ -21,6 +21,7 @@ def backfill(engine: Engine, cfg, end=None) -> pd.DatetimeIndex:
     log.info("positions: %d rows loaded from %s", etl.load_positions(engine, cfg, path), path)
     res, blocked = etl.run_dq(engine, cfg, start, end, run_id=f"backfill-{etl.now_cst():%Y%m%dT%H%M%S}")
     _log_dq(res, blocked)
+    risk_job.invalidate_risk(engine, cfg, start, end)
     return blocked
 
 
@@ -38,6 +39,7 @@ def daily(engine: Engine, cfg, date=None) -> pd.DatetimeIndex | None:
     log.info("positions: %d rows loaded", etl.load_positions(engine, cfg, path))
     res, blocked = etl.run_dq(engine, cfg, d, d, run_id=f"daily-{etl.now_cst():%Y%m%dT%H%M%S}")
     _log_dq(res, blocked)
+    risk_job.invalidate_risk(engine, cfg, d, d)
     if len(blocked):
         log.error("%s: blocking DQ failure, risk not computed", d.date())
         return blocked

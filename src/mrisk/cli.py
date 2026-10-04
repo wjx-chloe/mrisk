@@ -48,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "dq":
         res, blocked = etl.run_dq(engine, cfg, pd.Timestamp(args.start), pd.Timestamp(args.end))
         jobs._log_dq(res, blocked)
+        risk_job.invalidate_risk(engine, cfg, args.start, args.end)
         return 2 if len(blocked) else 0
     if args.cmd == "risk":
         if args.end and not args.start:

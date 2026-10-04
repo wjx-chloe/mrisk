@@ -215,24 +215,118 @@ def test_risk_job_rerun_replaces_the_date(risk_env):
     assert dropped not in set(rr["level_key"])
 
 
-def test_risk_job_gates_on_latest_dq_run(risk_env, caplog):
-    engine, cfg = risk_env
-    d1, d2 = pd.Timestamp("2025-05-21"), pd.Timestamp("2025-05-22")
-    # a later DQ run fails a blocking rule on d1; d2 has no DQ result at all
+def _dq(engine, day, rule, status="fail", created=dt.datetime(2030, 1, 1)):
+    """A later DQ run for one check date; it becomes the latest run for that date."""
     upsert(engine, s.dq_result, pd.DataFrame([{
-        "run_id": "later", "check_date": d1, "rule_id": "DQ02", "status": "fail", "n_checked": 6, "n_failed": 1,
-        "detail_json": None, "created_at": dt.datetime(2030, 1, 1)}]))
-    with engine.begin() as conn:
-        conn.execute(delete(s.dq_result).where(s.dq_result.c.check_date == d2.date()))
-    status = risk_job.run_risk(engine, cfg, RISK_DATE, d2, run_id="g")
-    assert status.to_dict() == {RISK_DATE: "ok", d1: "blocked", d2: "no_dq"}
-    assert set(read_frame(engine, s.risk_result)["trade_date"]) == {RISK_DATE}
-    assert "DQ status blocked" in caplog.text and "DQ status no_dq" in caplog.text
+        "run_id": f"later-{created:%Y%m%d}", "check_date": pd.Timestamp(day), "rule_id": rule, "status": status,
+        "n_checked": 6, "n_failed": int(status == "fail"), "detail_json": None, "created_at": created}]))
 
 
-def test_risk_job_refuses_short_history(risk_env):
+def _cal(engine, start, end):
+    return etl.trading_days(engine, pd.Timestamp(start), pd.Timestamp(end))
+
+
+F = pd.Timestamp("2025-05-21")
+
+
+def test_dq_gate_position_failure_blocks_only_that_day(risk_env):
     engine, cfg = risk_env
-    with pytest.raises(ValueError, match="need 21 prices"):
+    _dq(engine, F, "DQ11")
+    dates = _cal(engine, "2025-05-20", "2025-06-27")
+    gate = risk_job.dq_gate(engine, cfg, dates)
+    assert gate.index[gate["status"] != "ok"].tolist() == [F]
+    assert gate.at[F, "reason"] == "position ['DQ11'] on 2025-05-21"
+
+
+def test_dq_gate_price_failure_blocks_every_window_that_holds_it(risk_env):
+    engine, cfg = risk_env
+    _dq(engine, F, "DQ03")
+    cal = etl.trading_days(engine)
+    i = cal.get_loc(F)
+    dates = _cal(engine, "2025-05-20", "2025-06-27")
+    gate = risk_job.dq_gate(engine, cfg, dates)
+    # F and the next lookback (20) trading days hold F in their window; the day before and the 21st after do not
+    assert gate.index[gate["status"] == "blocked"].equals(cal[i : i + 21])
+    assert gate.at[cal[i - 1], "status"] == "ok" and gate.at[cal[i + 21], "status"] == "ok"
+    assert "DQ03@2025-05-21" in gate.at[cal[i + 20], "reason"]
+    # fixed and re-checked: the latest run for F passes, the failure is resolved
+    _dq(engine, F, "DQ03", "pass", dt.datetime(2031, 1, 1))
+    assert (risk_job.dq_gate(engine, cfg, dates)["status"] == "ok").all()
+
+
+def test_dq_gate_missing_dq_in_window_and_precedence(risk_env):
+    engine, cfg = risk_env
+    gap = pd.Timestamp("2025-05-12")
+    with engine.begin() as conn:
+        conn.execute(delete(s.dq_result).where(s.dq_result.c.check_date == gap.date()))
+    _dq(engine, F, "DQ11")
+    cal = etl.trading_days(engine)
+    i = cal.get_loc(gap)
+    gate = risk_job.dq_gate(engine, cfg, cal[i - 1 : i + 22])
+    st = gate["status"]
+    assert st[cal[i - 1]] == "ok" and st[cal[i + 21]] == "ok"
+    assert (st[cal[i : i + 21].drop(F)] == "no_dq").all()
+    assert st[F] == "blocked"  # a known failure wins over a missing check
+    assert gate.at[gap, "reason"] == "no DQ result for 1 day(s) in window, first 2025-05-12"
+
+
+def test_run_risk_deletes_a_blocked_day_it_had_stored(risk_env, caplog):
+    engine, cfg = risk_env
+    risk_job.run_risk(engine, cfg, F, run_id="r1")
+    _dq(engine, F, "DQ07")
+    status = risk_job.run_risk(engine, cfg, F, run_id="r2")
+    assert status.to_dict() == {F: "blocked"}
+    assert read_frame(engine, s.risk_result).empty
+    assert "risk not computed (blocked): position ['DQ07'] on 2025-05-21" in caplog.text
+
+
+def test_invalidate_risk_scopes_deletion_by_rule_class(risk_env):
+    engine, cfg = risk_env
+    risk_job.run_risk(engine, cfg, "2025-05-20", "2025-06-27")
+    stored = set(read_frame(engine, s.risk_result)["trade_date"])
+    cal = etl.trading_days(engine)
+    i = cal.get_loc(F)
+    _dq(engine, F, "DQ03")
+    gone = risk_job.invalidate_risk(engine, cfg, F, F)
+    assert gone.equals(cal[i : i + 21])
+    left = set(read_frame(engine, s.risk_result)["trade_date"])
+    assert left == stored - set(cal[i : i + 21])
+
+    g = pd.Timestamp("2025-06-25")
+    _dq(engine, g, "DQ11")
+    assert risk_job.invalidate_risk(engine, cfg, g, g).tolist() == [g]
+    assert set(read_frame(engine, s.risk_result)["trade_date"]) == left - {g}
+    assert risk_job.invalidate_risk(engine, cfg, "2025-06-02", "2025-06-06").empty  # nothing failed there
+
+
+def test_daily_skips_risk_when_window_has_an_unresolved_price_failure(risk_env, monkeypatch):
+    engine, cfg = risk_env
+    _dq(engine, "2025-06-20", "DQ02")
+    monkeypatch.setattr(etl, "now_cst", lambda: dt.datetime(2025, 6, 30, 16, 31))
+    assert jobs.daily(engine, cfg, "2025-06-30").tolist() == [pd.Timestamp("2025-06-30")]
+    assert read_frame(engine, s.risk_result).empty
+
+
+@pytest.mark.parametrize(
+    "scope, msg",
+    [
+        ({"price": ["DQ02", "DQ03"], "position": ["DQ07", "DQ08", "DQ09"]}, "must cover exactly"),
+        ({"price": ["DQ02", "DQ03", "DQ11"], "position": ["DQ07", "DQ08", "DQ09", "DQ11"]}, "both price and position"),
+    ],
+)
+def test_blocking_scope_must_classify_every_blocking_rule_once(risk_env, scope, msg):
+    engine, cfg = risk_env
+    cfg["dq"]["blocking_scope"] = scope
+    with pytest.raises(ValueError, match=msg):
+        risk_job.run_risk(engine, cfg, RISK_DATE)
+
+
+def test_risk_job_short_calendar_raises_and_unchecked_window_is_no_dq(risk_env):
+    engine, cfg = risk_env
+    # DQ starts at price_start 2025-03-10; the 20-day window of 2025-04-01 begins 2025-03-04
+    assert risk_job.run_risk(engine, cfg, "2025-04-01").to_dict() == {pd.Timestamp("2025-04-01"): "no_dq"}
+    cfg["lookback_days"] = 60
+    with pytest.raises(ValueError, match="fewer than 61 days"):
         risk_job.run_risk(engine, cfg, "2025-04-01")
 
 
