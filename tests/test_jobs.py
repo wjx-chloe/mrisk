@@ -123,6 +123,10 @@ def test_backfill_then_daily(env, monkeypatch):
     assert last.set_index("rule_id").loc["DQ10", "status"] == "pass"
     rr = read_frame(engine, s.risk_result)
     assert set(rr["trade_date"]) == {pd.Timestamp("2025-06-30")} and set(rr["confidence"]) == {0.95, 0.99}
+    ph = read_frame(engine, s.pnl_hypo, date_col="position_date")
+    assert set(ph["position_date"]) == {LAST_BACKFILL} and set(ph["pnl_date"]) == {pd.Timestamp("2025-06-30")}
+    assert set(read_frame(engine, s.var_attribution)["trade_date"]) == {pd.Timestamp("2025-06-30")}
+    assert read_frame(engine, s.backtest_result, date_col="asof_date").empty  # warming up: 1 observation
 
 
 def test_daily_infers_suspension_for_held_stock_without_quote(env, monkeypatch):

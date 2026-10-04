@@ -5,6 +5,9 @@ from sqlalchemy import Engine
 
 from mrisk.jobs import etl
 from mrisk.jobs import gate
+from mrisk.jobs import attribution as attribution_job
+from mrisk.jobs import backtest as backtest_job
+from mrisk.jobs import pnl as pnl_job
 from mrisk.jobs import risk as risk_job
 
 log = logging.getLogger(__name__)
@@ -27,8 +30,9 @@ def backfill(engine: Engine, cfg, end=None) -> pd.DatetimeIndex:
 
 
 def daily(engine: Engine, cfg, date=None) -> pd.DatetimeIndex | None:
-    """Incremental run for one trading day: prices -> positions -> DQ -> risk, the last only when DQ has no
-    blocking failure. Returns the blocked dates (DQ or the risk gate), or None if not a trading day."""
+    """Incremental run for one trading day: prices -> positions -> DQ, then, only when DQ has no blocking
+    failure, risk of d -> hypothetical P&L realised on d -> backtest as of d -> attribution of d.
+    Returns the dates some step refused (DQ or a gate), or None if not a trading day."""
     src = etl.make_source(cfg)
     etl.fetch_trade_calendar(engine, src)
     d = pd.Timestamp(date).normalize() if date else pd.Timestamp(etl.now_cst().date())
@@ -44,8 +48,18 @@ def daily(engine: Engine, cfg, date=None) -> pd.DatetimeIndex | None:
     if len(blocked):
         log.error("%s: blocking DQ failure, risk not computed", d.date())
         return blocked
+    refused = []
     status = risk_job.run_risk(engine, cfg, d)
-    return pd.DatetimeIndex(status.index[status != "ok"])
+    refused += list(status.index[status != "ok"])
+    prev = etl.trading_days(engine, end=d)[-2:-1]  # the position date whose P&L is realised on d
+    if len(prev):
+        status = pnl_job.run_pnl(engine, cfg, prev[0])
+        refused += list(status.index[status != "ok"])
+    status = backtest_job.run_backtest(engine, cfg, d)
+    refused += list(status.index[~status.isin(["ok", "warming_up"])])
+    status = attribution_job.run_attribution(engine, cfg, d)
+    refused += list(status.index[status != "ok"])
+    return pd.DatetimeIndex(sorted(set(refused)))
 
 
 def _log_dq(res: pd.DataFrame, blocked: pd.DatetimeIndex) -> None:
