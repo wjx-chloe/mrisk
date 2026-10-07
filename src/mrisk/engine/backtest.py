@@ -4,10 +4,10 @@
 import numpy as np
 import pandas as pd
 from scipy.special import xlogy
-from scipy.stats import chi2
+from scipy.stats import binom, chi2
 
 CRITICAL_5PCT = float(chi2.ppf(0.95, 1))  # 3.8415, exact rather than the rounded 3.84
-TRAFFIC_LIGHT_OBS = 250
+GREEN_CUM, YELLOW_CUM = 0.95, 0.9999  # Basel cut-offs on the cumulative exception probability
 
 
 def exceptions(var, pnl) -> np.ndarray:
@@ -46,10 +46,21 @@ def christoffersen_ind(n00, n01, n10, n11) -> tuple[np.ndarray, np.ndarray]:
     return lr, chi2.sf(lr, 1)
 
 
-def traffic_light(x) -> np.ndarray:
-    """Basel zones for 250 observations at 99%: <= 4 green, 5-9 yellow, >= 10 red."""
+def zone_bounds(p: float, n: int) -> tuple[int, int]:
+    """Basel traffic-light bounds for n observations at exception rate p, X ~ B(n, p): k exceptions are green while
+    P(X <= k) < 95%, yellow while P(X <= k) < 99.99%, red beyond. -> (largest green k, largest yellow k), -1 where
+    no count qualifies. n = 250: 4 / 9 at p = 0.01, 17 / 26 at p = 0.05."""
+    if not 0 < p < 1 or n < 1:
+        raise ValueError(f"need 0 < p < 1 and n >= 1, got p={p}, n={n}")
+    c = binom.cdf(np.arange(n + 1), n, p)  # non-decreasing in k
+    return int((c < GREEN_CUM).sum()) - 1, int((c < YELLOW_CUM).sum()) - 1
+
+
+def traffic_light(x, p: float, n: int) -> np.ndarray:
+    """Zone of each exception count x over n observations at exception rate p (bounds from zone_bounds)."""
+    green, yellow = zone_bounds(p, n)
     x = np.asarray(x)
-    return np.select([x <= 4, x <= 9], ["green", "yellow"], "red")
+    return np.select([x <= green, x <= yellow], ["green", "yellow"], "red")
 
 
 def rolling_backtest(hit, valid, window: int, p: float) -> pd.DataFrame:

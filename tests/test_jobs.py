@@ -480,16 +480,15 @@ def test_pnl_gate_and_invalidation_follow_each_tables_dependencies(risk_env):
 
 
 # ---- backtest job ---------------------------------------------------------------------------------------------
-from mrisk.engine.backtest import christoffersen_ind, kupiec_pof  # noqa: E402
+from mrisk.engine.backtest import christoffersen_ind, kupiec_pof, traffic_light  # noqa: E402
 from mrisk.jobs import backtest as backtest_job  # noqa: E402
 
 
 @pytest.fixture
-def bt_env(env, monkeypatch):
+def bt_env(env):
     engine, cfg = env
     cfg["lookback_days"] = 5
     cfg["backtest_window_days"] = 15
-    monkeypatch.setattr(backtest_job, "TRAFFIC_LIGHT_OBS", 15)
     assert len(jobs.backfill(engine, cfg, end=LAST_BACKFILL)) == 0
     risk_job.run_risk(engine, cfg, "2025-04-01", "2025-06-26")
     pnl_job.run_pnl(engine, cfg, "2025-04-01", "2025-06-26")
@@ -504,8 +503,10 @@ def test_backtest_job_matches_loop_recompute(bt_env):
     assert (status[status.index < first_ok] == "warming_up").all() and (status[status.index >= first_ok] == "ok").all()
     br = read_frame(engine, s.backtest_result, date_col="asof_date")
     assert len(br) == (status == "ok").sum() * 4
-    zones = br.groupby(["method", "confidence"])["zone"].apply(lambda z: z.notna().all())
-    assert zones.to_dict() == {("hs", 0.95): False, ("hs", 0.99): True, ("param", 0.95): False, ("param", 0.99): False}
+    # every method x confidence gets a zone, bounds from (1 - confidence, window of 15)
+    assert br["zone"].notna().all()
+    for conf, g in br.groupby("confidence"):
+        assert g["zone"].tolist() == traffic_light(g["n_exceptions"], 1 - conf, 15).tolist()
 
     rr = read_frame(engine, s.risk_result, level="portfolio").set_index(["trade_date", "confidence"])
     ph = read_frame(engine, s.pnl_hypo, date_col="position_date", level="portfolio").set_index("pnl_date")

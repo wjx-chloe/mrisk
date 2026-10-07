@@ -8,6 +8,7 @@ from mrisk.engine.backtest import (
     kupiec_pof,
     rolling_backtest,
     traffic_light,
+    zone_bounds,
 )
 
 
@@ -58,8 +59,23 @@ def test_christoffersen_edges():
     assert lr == pytest.approx(0.0, abs=1e-12)
 
 
-def test_traffic_light_boundaries():
-    assert traffic_light([0, 4, 5, 9, 10, 30]).tolist() == ["green", "green", "yellow", "yellow", "red", "red"]
+def test_traffic_light_boundaries_basel_250():
+    # Basel table: 99% -> <= 4 green, 5-9 yellow, >= 10 red; same rule at 95% -> 17 / 26
+    assert zone_bounds(0.01, 250) == (4, 9)
+    assert zone_bounds(0.05, 250) == (17, 26)
+    assert traffic_light([0, 4, 5, 9, 10, 30], 1 - 0.99, 250).tolist() == ["green", "green", "yellow", "yellow", "red", "red"]
+    assert traffic_light([17, 18, 26, 27], 1 - 0.95, 250).tolist() == ["green", "yellow", "yellow", "red"]
+
+
+def test_zone_bounds_hand_computed():
+    # n = 2, p = 0.5: P(X <= 0) = 0.25, P(X <= 1) = 0.75, P(X <= 2) = 1
+    # green while < 0.95 -> k <= 1; yellow while < 0.9999 -> also k <= 1; so 2 is red with no yellow count
+    assert zone_bounds(0.5, 2) == (1, 1)
+    assert traffic_light([0, 1, 2], 0.5, 2).tolist() == ["green", "green", "red"]
+    # n = 1, p = 0.06: P(X <= 0) = 0.94 < 0.95 green, P(X <= 1) = 1 red
+    assert zone_bounds(0.06, 1) == (0, 0)
+    with pytest.raises(ValueError):
+        zone_bounds(0.0, 250)
 
 
 def test_exceptions_are_strict():

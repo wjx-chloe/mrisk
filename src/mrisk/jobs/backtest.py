@@ -10,7 +10,7 @@ from sqlalchemy import Engine, func, select
 
 from mrisk.db import schema as s
 from mrisk.db.repo import read_frame, replace_dates
-from mrisk.engine.backtest import TRAFFIC_LIGHT_OBS, exceptions, rolling_backtest, traffic_light
+from mrisk.engine.backtest import exceptions, rolling_backtest, traffic_light
 from mrisk.jobs import etl
 
 log = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ def run_backtest(engine: Engine, cfg, start, end=None, run_id: str | None = None
             status[(~bt["complete"].to_numpy()) & (k + 1 >= W)] = "gap"
             bt.index = obs["pnl_date"]
             bt = bt[bt["complete"].to_numpy() & in_range.to_numpy()]
-            zone = traffic_light(bt["n_exceptions"]) if (method == "hs" and conf == 0.99 and W == TRAFFIC_LIGHT_OBS) else None
+            zone = traffic_light(bt["n_exceptions"], 1 - conf, W)  # every method x confidence, bounds from (p, W)
             rows.append(
                 bt.drop(columns=["complete", "n00", "n01", "n10", "n11"]).assign(
                     method=method, confidence=conf, window_days=W, zone=zone
