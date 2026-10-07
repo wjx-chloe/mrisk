@@ -9,10 +9,12 @@ dependencies = [
     "apscheduler>=3.11.3",
     "numpy>=2.4.6",
     "pandas>=3.0.6",
+    "plotly>=7.1.0",
     "pyarrow>=25.0.1",
     "pyyaml>=6.0.3",
     "scipy>=1.17.1",
     "sqlalchemy>=2.0.54",
+    "streamlit>=1.65.0",
 ]
 
 [project.scripts]
