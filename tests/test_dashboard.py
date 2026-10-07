@@ -4,21 +4,24 @@ read; Plotly data it cannot, so figures are checked in the charts tests)."""
 
 import datetime as dt
 import shutil
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 import yaml
 from sqlalchemy import delete, update
+from streamlit.testing.v1 import AppTest
 
 from fake_world import LAST_BACKFILL, make_env
 from mrisk.config import load_config
 from mrisk.dashboard import charts
 from mrisk.dashboard import queries as q
 from mrisk.dashboard import transforms as tf
+from mrisk.dashboard.common import LIMIT_LABEL, wan
 from mrisk.db import schema as s
 from mrisk.db.repo import get_engine, read_frame, upsert
-from mrisk.engine.backtest import traffic_light
+from mrisk.engine.backtest import traffic_light, zone_bounds
 from mrisk.jobs import attribution as attribution_job
 from mrisk.jobs import backtest as backtest_job
 from mrisk.jobs import daily as jobs
@@ -28,6 +31,8 @@ from mrisk.jobs import pnl as pnl_job
 from mrisk.jobs import risk as risk_job
 from mrisk.jobs import stress as stress_job
 
+APP = Path(__file__).resolve().parents[1] / "src" / "mrisk" / "dashboard" / "app.py"
+PAGES = ["overview", "trend", "exposure", "backtest", "attribution", "stress", "limits", "dq"]
 
 
 # ---- transforms ----------------------------------------------------------------------------------------------
@@ -280,3 +285,104 @@ def test_stress_queries_label_modes_and_flag_proxied_names(world):
     ind, inst = q.stress_detail(engine, pid, d, "HIST_A")
     assert inst.set_index("instrument_id")["proxied"].to_dict() == {i: i == name for i in inst["instrument_id"]}
     assert ind["loss_pct"].sum() == pytest.approx(inst["loss_pct"].sum())  # proxied names still count in the totals
+
+
+# ---- pages through AppTest -----------------------------------------------------------------------------------
+
+def _app(page: str | None = None, conf: float | None = None) -> AppTest:
+    at = AppTest.from_file(str(APP), default_timeout=120)
+    at.run()
+    if conf is not None:
+        at.sidebar.radio(key="conf").set_value(conf)
+    if page is not None:
+        at.switch_page(f"views/{page}.py")
+    if conf is not None or page is not None:
+        at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    return at
+
+
+@pytest.mark.parametrize("conf", [0.99, 0.95])
+def test_every_page_renders(world, conf):
+    at = _app(conf=conf)
+    for page in PAGES:
+        at.switch_page(f"views/{page}.py")
+        at.run()
+        assert not at.exception, (page, [e.value for e in at.exception])
+        assert at.header[0].value  # every page titles itself
+
+
+def test_overview_metrics_and_limit_lights_match_the_database(world):
+    engine, cfg = world
+    complete = q.complete_dates(engine, cfg)
+    d, prev = complete[-1], complete[-2]
+    at = _app()
+    assert at.sidebar.selectbox(key="date").value == d
+    rr = read_frame(engine, s.risk_result, prev, d, level="portfolio")
+    rr = rr[rr["confidence"] == 0.99].set_index("trade_date")
+    m = {x.label: x for x in at.metric}
+    assert m["组合市值"].value == wan(rr.at[d, "market_value"])
+    assert m["VaR 历史模拟 99%"].value == wan(rr.at[d, "var_hs"])
+    assert m["ES 历史模拟 99%"].delta == f"{(rr.at[d, 'es_hs'] - rr.at[prev, 'es_hs']) / 1e4:+,.1f} 万"
+    lights = at.dataframe[0].value.set_index("规则")
+    lc = read_frame(engine, s.limit_check, d, d).set_index("rule_id")
+    assert set(lights.index) == set(lc.index)
+    for rid in lc.index:
+        assert lights.at[rid, "状态"] == LIMIT_LABEL[lc.at[rid, "status"]]
+
+
+def test_confidence_switch_changes_the_numbers(world):
+    engine, cfg = world
+    d = q.complete_dates(engine, cfg)[-1]
+    at = _app(conf=0.95)
+    var95 = read_frame(engine, s.risk_result, d, d, level="portfolio").set_index("confidence").at[0.95, "var_hs"]
+    assert {x.label: x.value for x in at.metric}["VaR 历史模拟 95%"] == wan(var95)
+
+
+def test_backtest_page_at_95_shows_binomial_bounds(world):
+    engine, cfg = world
+    at = _app("backtest", 0.95)
+    g, y = zone_bounds(0.05, 15)
+    assert any(f"≤ {g} 绿，{g + 1}–{y} 黄，≥ {y + 1} 红" in c.value for c in at.caption)
+    tab = at.dataframe[0].value.set_index("方法")
+    br, _ = q.backtest(engine, cfg, q.complete_dates(engine, cfg)[-1], 0.95)
+    assert tab.at["历史模拟", "例外"] == br.at["hs", "n_exceptions"]
+
+
+def test_limits_page_separates_new_from_continuing(world):
+    engine, cfg = world
+    pos = q.position_dates(engine, _pid(cfg))
+    lc = s.limit_check.c
+    with engine.begin() as conn:
+        conn.execute(update(s.limit_check).where(lc.rule_id == "L_CONC_INST", lc.trade_date == pos[-2].date()).values(status="ok"))
+    at = _app("limits")
+    m = {x.label: x.value for x in at.metric}
+    tab = at.dataframe[0].value.set_index("规则")
+    assert tab.at["L_CONC_INST", "触发"] == "今日新触发" and int(m["今日新触发"]) >= 1
+    others = tab[(tab.index != "L_CONC_INST") & tab["status"].isin(["warn", "breach"])]
+    assert all(v.startswith("已持续 ") for v in others["触发"])
+
+
+def test_stress_page_ranks_with_mode_and_hides_proxied_names(world):
+    engine, cfg = world
+    name = _mark_proxied(engine, q.complete_dates(engine, cfg)[-1], "HIST_A")
+    at = _app("stress")
+    ranking, pair = at.dataframe[0].value, at.dataframe[1].value
+    assert {"历史", "β 传导", "其余不变"} <= set(ranking["模式"])
+    assert pair.columns[1] == "β 传导（基于近 250 日相关性）" and pair["冲击"].tolist() == ["银行 -10%"]
+    at.selectbox(key="stress_scenario").set_value("HIST_A").run()
+    names = at.dataframe[2].value
+    proxied = names["说明"] != ""
+    assert names.loc[proxied, "代码"].tolist() == [name]
+    assert (names.loc[proxied, "损失占组合市值"] == "—").all() and (names.loc[proxied, "个股情景收益"] == "—").all()
+    assert (names.loc[~proxied, "损失占组合市值"] != "—").all()
+
+
+def test_blocked_latest_day_puts_a_banner_on_every_page(world):
+    engine, cfg = world
+    last = q.position_dates(engine, _pid(cfg))[-1]
+    _dq_fail(engine, last)
+    gate.invalidate(engine, cfg, last, last)
+    at = _app("dq")
+    assert any("DQ 门禁阻断" in e.value for e in at.error)
+    assert at.sidebar.selectbox(key="date").value < last
