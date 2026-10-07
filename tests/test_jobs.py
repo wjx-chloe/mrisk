@@ -96,6 +96,7 @@ def env(tmp_path, monkeypatch):
         {"scenario_id": "HIST_B", "type": "historical", "definition": {"base": "2025-05-14", "end": "2025-05-20"}},
         {"scenario_id": "MKT_-5", "type": "hypothetical", "definition": {"market": -0.05}},
         {"scenario_id": "IND_银行_-10", "type": "hypothetical", "definition": {"industry": {"银行": -0.10}}},
+        {"scenario_id": "IND_银行_-10_RAW", "type": "hypothetical", "definition": {"raw": {"industry": {"银行": -0.10}}}},
     ], ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr(stress_job, "SEED", scen)
     rules = tmp_path / "limit_rule.csv"
@@ -589,7 +590,7 @@ def test_stress_job_recomputes_from_db(risk_env):
     status = stress_job.run_stress(engine, cfg, t, run_id="s1")
     assert status.to_dict() == {t: "ok"}
     sr = read_frame(engine, s.stress_result, t, t)
-    assert set(sr["scenario_id"]) == {"HIST_A", "HIST_B", "MKT_-5", "IND_银行_-10"}
+    assert set(sr["scenario_id"]) == {"HIST_A", "HIST_B", "MKT_-5", "IND_银行_-10", "IND_银行_-10_RAW"}
     # stress P&L adds up across levels
     for sid, g in sr.groupby("scenario_id"):
         sums = g.groupby("level")["pnl"].sum()
@@ -612,6 +613,9 @@ def test_stress_job_recomputes_from_db(risk_env):
     bank = inst.index[inst["industry_l1"] == "银行"]
     b = betas(R[pos.index], R[bank].mean(axis=1))
     assert port.at["IND_银行_-10", "pnl"] == pytest.approx((mv * b * -0.10).sum(), rel=1e-9)
+    # the raw twin: -10% on the bank holdings only, everything else unchanged
+    held_bank = pos.index.intersection(bank)
+    assert len(held_bank) and port.at["IND_银行_-10_RAW", "pnl"] == pytest.approx(-0.10 * mv[held_bank].sum(), rel=1e-12)
     assert port.at["MKT_-5", "max_daily_loss"] != port.at["MKT_-5", "max_daily_loss"]  # NaN for hypothetical
 
 
@@ -644,6 +648,43 @@ def test_stress_fixed_dates_gate_and_cascade_to_limits(risk_env):
     b = lc[lc["rule_id"] == "L_STRESS_B"]
     assert len(b) == 4 and (b["status"] == "no_data").all()
     assert b["detail"].iloc[0]["missing"] == "stress_result" and b["detail"].iloc[0]["reason"].startswith("blocked: price on dates HIST_B")
+
+
+def test_raw_scenario_rests_on_prices_of_t_only(risk_env):
+    """A bad price inside t's VaR window refuses the beta-propagated scenario but not its raw twin."""
+    engine, cfg = risk_env
+    cal = etl.trading_days(engine)
+    days = _cal(engine, "2025-06-02", "2025-06-06")
+    t = days[2]
+    _dq(engine, cal[cal.get_loc(t) - 3], "DQ03")
+    stress_job.run_stress(engine, cfg, days[0], days[-1])
+    assert gate.dq_gate(engine, cfg, pd.DatetimeIndex([t]), "stress_result:hypothetical", key="IND_银行_-10").at[t, "status"] == "blocked"
+    assert gate.dq_gate(engine, cfg, pd.DatetimeIndex([t]), "stress_result:raw", key="IND_银行_-10_RAW").at[t, "status"] == "ok"
+    on_t = set(read_frame(engine, s.stress_result, t, t)["scenario_id"])
+    assert "IND_银行_-10_RAW" in on_t and "IND_银行_-10" not in on_t and "MKT_-5" not in on_t
+    # invalidation follows the same declaration: the raw rows of t survive, the factor rows of t are gone
+    stress_job.run_stress(engine, cfg, days[0], days[-1])
+    f = cal[cal.get_loc(t) - 3]
+    gone = gate.invalidate(engine, cfg, f, f)
+    assert gone["stress_result:raw/IND_银行_-10_RAW"].equals(pd.DatetimeIndex([f]))  # only the failure day itself
+    assert t in gone["stress_result:hypothetical/IND_银行_-10"]
+    assert "IND_银行_-10_RAW" in set(read_frame(engine, s.stress_result, t, t)["scenario_id"])
+
+
+def test_invalidate_keyed_entry_without_keys_deletes_nothing(risk_env, tmp_path, monkeypatch):
+    """With no hypothetical scenarios at all, a window failure must not wipe the historical rows of the days whose
+    window holds it (a keyed entry with no keys used to fall back to an unkeyed delete of every scenario)."""
+    engine, cfg = risk_env
+    scen = tmp_path / "hist_only.json"
+    scen.write_text(json.dumps([{"scenario_id": "HIST_A", "type": "historical", "definition": {"base": "2025-05-12", "end": "2025-05-16"}}]), encoding="utf-8")
+    monkeypatch.setattr(stress_job, "SEED", scen)
+    cal = etl.trading_days(engine)
+    days = _cal(engine, "2025-06-02", "2025-06-06")
+    stress_job.run_stress(engine, cfg, days[0], days[-1])
+    f = cal[cal.get_loc(days[2]) - 3]  # in the VaR window of days[2], not a date HIST_A rests on
+    _dq(engine, f, "DQ03")
+    gate.invalidate(engine, cfg, f, f)
+    assert set(read_frame(engine, s.stress_result, days[0], days[-1])["trade_date"]) == set(days)
 
 
 def test_limits_job_writes_every_rule_every_day_with_no_data_where_inputs_are_refused(risk_env):

@@ -11,7 +11,7 @@ from sqlalchemy import Engine, delete
 from mrisk.db import schema as s
 from mrisk.db.repo import read_frame, upsert
 from mrisk.engine.valuation import market_value
-from mrisk.jobs.gate import dq_gate
+from mrisk.jobs.gate import dq_gate, stress_entry
 from mrisk.limits.engine import evaluate, metric_rows
 
 log = logging.getLogger(__name__)
@@ -55,7 +55,8 @@ def run_limits(engine: Engine, cfg, start, end=None, run_id: str | None = None) 
     rr = read_frame(engine, s.risk_result, start, end, portfolio_id=pid, level="portfolio")
     sr = read_frame(engine, s.stress_result, start, end, portfolio_id=pid, level="portfolio")
     conc_gate = dq_gate(engine, cfg, dates, "limit_check:concentration")["status"]
-    scen_type = read_frame(engine, s.scenario, date_col="scenario_id", columns=["scenario_id", "type"]).set_index("scenario_id")["type"]
+    scen = read_frame(engine, s.scenario, date_col="scenario_id", columns=["scenario_id", "type", "definition"])
+    scen_entry = {r.scenario_id: stress_entry(r.type, r.definition) for r in scen.itertuples()}
     needed = set(active["metric"])
 
     rows, worst = [], {}
@@ -90,9 +91,9 @@ def run_limits(engine: Engine, cfg, start, end=None, run_id: str | None = None) 
             if len(row):
                 metrics.append(metric_rows(m, "portfolio", [pid], [-row["pnl"].iloc[0]], row["market_value"].iloc[0]))
             else:
-                if sid not in scen_type:
+                if sid not in scen_entry:
                     raise ValueError(f"limit on unknown scenario {sid}")
-                missing[m] = _reason(engine, cfg, d, f"stress_result:{scen_type[sid]}", key=sid)
+                missing[m] = _reason(engine, cfg, d, scen_entry[sid], key=sid)
         mtab = pd.concat(metrics, ignore_index=True) if metrics else pd.DataFrame(columns=["metric", "scope", "key", "value", "base"])
         chk = evaluate(active, mtab, missing).assign(trade_date=d)
         for c in chk.itertuples():

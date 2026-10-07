@@ -15,7 +15,7 @@ from mrisk.engine.returns import returns_window
 from mrisk.engine.stress import ScenarioPath, historical_stress, hypothetical_shocks, hypothetical_stress, scenario_path
 from mrisk.engine.valuation import market_value
 from mrisk.jobs import etl
-from mrisk.jobs.gate import dq_gate
+from mrisk.jobs.gate import dq_gate, stress_entry
 
 log = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ def run_stress(engine: Engine, cfg, start, end=None, run_id: str | None = None) 
 
     gates = {}
     for r in scenarios.itertuples():
-        g = dq_gate(engine, cfg, dates, f"stress_result:{r.type}", key=r.scenario_id)
+        g = dq_gate(engine, cfg, dates, stress_entry(r.type, r.definition), key=r.scenario_id)
         for d in dates[g["status"] != "ok"]:
             log.error("%s %s: stress not computed (%s): %s", d.date(), r.scenario_id, g.at[d, "status"], g.at[d, "reason"])
         gates[r.scenario_id] = g["status"]
@@ -92,6 +92,7 @@ def run_stress(engine: Engine, cfg, start, end=None, run_id: str | None = None) 
     wide = px.pivot(index="trade_date", columns="instrument_id")
     active = pool.loc[pool["status"] == "active", "instrument_id"]
     hyp = scenarios[scenarios["type"] == "hypothetical"]
+    factor = {r.scenario_id for r in hyp.itertuples() if stress_entry(r.type, r.definition) == "stress_result:hypothetical"}
     rows = []
     for d in dates:
         todo = st.columns[st.loc[d] == "ok"]
@@ -99,7 +100,7 @@ def run_stress(engine: Engine, cfg, start, end=None, run_id: str | None = None) 
             continue
         p = pos.loc[pos["trade_date"] == d, ["instrument_id", "quantity"]]
         mv = market_value(p, wide["close"].loc[d], ind).set_index("instrument_id")["market_value"]
-        if todo.isin(hyp["scenario_id"]).any():
+        if todo.isin(list(factor)).any():
             # the pool's VaR window of d, names with a full window (the factor universe)
             win = wide["adj_close"].loc[:d].tail(L + 1)
             full = active[active.isin(win.columns[win.notna().all()])]
@@ -110,7 +111,8 @@ def run_stress(engine: Engine, cfg, start, end=None, run_id: str | None = None) 
             if r.type == "historical":
                 res = historical_stress(mv, ind, paths[r.scenario_id], pid)
             else:
-                res = hypothetical_stress(mv, ind, hypothetical_shocks(r.definition, R_pool, ind, mv.index), pid)
+                R = R_pool if r.scenario_id in factor else None  # raw shocks need no window
+                res = hypothetical_stress(mv, ind, hypothetical_shocks(r.definition, R, ind, mv.index), pid)
             rows.append(res.assign(trade_date=d, scenario_id=r.scenario_id))
     out = pd.concat(rows, ignore_index=True).assign(portfolio_id=pid, run_id=run_id) if rows else pd.DataFrame(columns=[c.name for c in s.stress_result.columns])
     replace_dates(engine, s.stress_result, out, "trade_date", dates, portfolio_id=pid)

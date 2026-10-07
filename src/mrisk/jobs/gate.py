@@ -39,6 +39,14 @@ class Dependency:
     fixed: dict[str, pd.DatetimeIndex] = field(default_factory=dict)
 
 
+def stress_entry(scenario_type: str, definition: dict) -> str:
+    """Dependency entry of a scenario's stress_result rows: historical, hypothetical (factor shocks, betas on the VaR
+    window) or raw (shocks given per name: market values on t only)."""
+    if scenario_type == "historical":
+        return "stress_result:historical"
+    return "stress_result:raw" if "raw" in definition else "stress_result:hypothetical"
+
+
 def dependencies(cfg, engine: Engine) -> dict[str, Dependency]:
     L, W = cfg["lookback_days"], cfg["backtest_window_days"]
     deps = {
@@ -51,16 +59,20 @@ def dependencies(cfg, engine: Engine) -> dict[str, Dependency]:
         # as of a: W pairs (VaR at t, P&L t -> t + 1) for position dates t = a - W .. a - 1
         "backtest_result": Dependency(s.backtest_result, "asof_date", (W + L, 0), (W, -1)),
     }
-    scen = read_frame(engine, s.scenario, date_col="scenario_id", columns=["scenario_id", "type"]) if engine is not None else pd.DataFrame()
+    scen = read_frame(engine, s.scenario, date_col="scenario_id", columns=["scenario_id", "type", "definition"]) if engine is not None else pd.DataFrame()
     if len(scen):
-        hist = tuple(scen.loc[scen["type"] == "historical", "scenario_id"])
-        hyp = tuple(scen.loc[scen["type"] == "hypothetical", "scenario_id"])
+        entry = pd.Series([stress_entry(r.type, r.definition) for r in scen.itertuples()], index=scen["scenario_id"])
+        hist = tuple(entry.index[entry == "stress_result:historical"])
+        hyp = tuple(entry.index[entry == "stress_result:hypothetical"])
+        raw = tuple(entry.index[entry == "stress_result:raw"])
         spd = read_frame(engine, s.scenario_price_date, date_col="price_date")
         fixed = {k: pd.DatetimeIndex(sorted(g["price_date"])) for k, g in spd.groupby("scenario_id")}
         # historical: market values on t, positions of t, and the scenario's recorded price dates
         deps["stress_result:historical"] = Dependency(s.stress_result, "trade_date", (0, 0), (0, 0), "scenario_id", hist, fixed)
         # hypothetical: betas on the VaR window of t, positions of t
         deps["stress_result:hypothetical"] = Dependency(s.stress_result, "trade_date", (L, 0), (0, 0), "scenario_id", hyp)
+        # raw: shocks given per name, market values on t, positions of t
+        deps["stress_result:raw"] = Dependency(s.stress_result, "trade_date", (0, 0), (0, 0), "scenario_id", raw)
     # concentration limits: prices and positions of t only; other limits follow their inputs (see invalidate)
     deps["limit_check:concentration"] = Dependency(s.limit_check, "trade_date", (0, 0), (0, 0))
     return deps
@@ -219,8 +231,8 @@ def invalidate(engine: Engine, cfg, start, end) -> dict[str, pd.DatetimeIndex]:
             ids = rules.loc[rules["metric"].str.startswith("concentration_"), "rule_id"].tolist()
             out[name] = _limits_to_no_data(engine, pid, affected, ids, {"invalidated": "prices / positions of the day", "dq_failures": reason})
             continue
-        keyed = [] if dep.key_col is None else list(dep.keys)
-        for key in keyed or [None]:
+        # a keyed entry with no keys covers no rows (it must not fall back to the unkeyed, whole-table delete)
+        for key in [None] if dep.key_col is None else list(dep.keys):
             cond = [col.portfolio_id == pid] + ([col[dep.key_col] == key] if key is not None else [])
             hit_all = key is not None and px_days.isin(dep.fixed.get(key, pd.DatetimeIndex([]))).any()
             label = name if key is None else f"{name}/{key}"
