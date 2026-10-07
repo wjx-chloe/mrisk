@@ -1,0 +1,3 @@
+# shell scripts run by git bash: keep LF on every checkout
+.githooks/* text eol=lf
+*.sh text eol=lf

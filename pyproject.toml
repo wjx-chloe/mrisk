@@ -29,5 +29,8 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["network: hits akshare over the network (deselected by default)"]
+markers = [
+    "network: hits akshare over the network (deselected by default)",
+    "slow: needs the real database; skipped by the pre-commit hook",
+]
 addopts = "-m 'not network'"

@@ -1,0 +1,9 @@
+#!/bin/sh
+# Refuse the commit when the test suite fails. Enabled per clone with: git config core.hooksPath .githooks
+# Skips tests marked network (akshare) and slow (real-database regressions). Runs on the working tree, not only
+# the staged snapshot, so unstaged changes are tested too.
+echo "pre-commit: uv run pytest -q -m 'not network and not slow'" >&2
+if ! uv run pytest -q -m "not network and not slow"; then
+    echo "pre-commit: tests failed, commit refused" >&2
+    exit 1
+fi

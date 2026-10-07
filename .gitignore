@@ -11,3 +11,12 @@ wheels/
 
 # Local data: SQLite db and raw akshare cache
 /data/
+
+# Secrets
+.env
+.env.*
+
+# SQLite files anywhere (demo db, scratch copies), not only under /data/
+*.db
+*.sqlite
+*.sqlite3
