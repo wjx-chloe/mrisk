@@ -3,3 +3,4 @@ L_VAR99,P001,var_hs_99,portfolio,<=,0.04,pct_of_mv,0.9,true,组合 VaR（历史�
 L_ES99,P001,es_hs_99,portfolio,<=,0.07,pct_of_mv,0.9,true,组合 ES（历史模拟 99%）<= 市值 7%
 L_CONC_INST,P001,concentration_instrument,instrument:*,<=,0.10,pct_of_mv,0.8,true,单只股票市值占比 <= 10%
 L_CONC_IND,P001,concentration_industry,industry:*,<=,0.30,pct_of_mv,0.8,true,单一行业市值占比 <= 30%
+L_STRESS_2015,P001,stress_loss:HIST_2015,portfolio,<=,0.45,pct_of_mv,0.9,true,2015 股灾情景累计损失 <= 市值 45%（含代理部分，docs/week3b-stress-limits.md §5.3）

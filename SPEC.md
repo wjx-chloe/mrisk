@@ -398,10 +398,10 @@ parametric_dist: normal   # normal / t（t 为进阶）
 | 组合 ES（历史模拟，99%） | es_hs_99 / portfolio | ≤ 组合市值 × 7% | 90% |
 | 单只股票市值占比 | concentration_instrument / instrument:* | ≤ 10% | 80% |
 | 单一行业市值占比 | concentration_industry / industry:* | ≤ 30% | 80% |
-| 2015 股灾情景累计损失 | stress_loss:<2015 情景> / portfolio | 待定：压测做完后，用 497 天的候选阈值表再定 | 80% |
+| 2015 股灾情景累计损失 | stress_loss:HIST_2015 / portfolio | ≤ 组合市值 × 45%（含代理部分） | 90% |
 
 每条规则有 breach 阈值和 warn 阈值（= warn 比例 × breach 阈值）。损失类指标（VaR、ES、情景损失）一律用正数表示损失。
-VaR99、ES99 的阈值依据 docs/week2-limit-material.md 和第 3 周规划中的候选阈值表。
+VaR99、ES99 的阈值依据 docs/week2-limit-material.md 和第 3 周规划中的候选阈值表；2015 情景阈值依据 docs/week3b-stress-limits.md §5.3 的候选阈值表，按含代理部分的口径评估。
 
 ### 6.3 监控与告警
 - 每日计算完成后自动跑所有 active 规则，写 limit_check
