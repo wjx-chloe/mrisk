@@ -25,10 +25,12 @@ BJ = ("BJ", "920682")
 
 
 def stress_job_rules_csv():
-    """The repo's four limit rules plus a stress-loss rule on HIST_B, for the fake portfolio."""
+    """The repo's limit rules plus a stress-loss rule on HIST_B, for the fake portfolio. The repo's own stress-loss
+    rules are dropped: their scenarios (HIST_2015, ...) are not in the fake scenario seed."""
     from mrisk.jobs.limits import SEED as REPO_RULES
 
-    body = REPO_RULES.read_text(encoding="utf-8").rstrip("\n")
+    lines = REPO_RULES.read_text(encoding="utf-8").splitlines()
+    body = "\n".join(x for x in lines if ",stress_loss:" not in x)
     return body + "\nL_STRESS_B,P001,stress_loss:HIST_B,portfolio,<=,0.05,pct_of_mv,0.8,true,test\n"
 
 
