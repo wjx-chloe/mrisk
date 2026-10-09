@@ -12,7 +12,11 @@ config（MRISK_CONFIG）─► 数据库（SQLite 只读打开）
             dashboard/app.py（侧边栏、横幅、st.navigation）→ dashboard/views/*.py（8 个页面）
 ```
 
-- 启动：`uv run streamlit run src/mrisk/dashboard/app.py`（只在本机看时加 `--server.address localhost`，否则 Streamlit 默认监听所有网卡）。
+- 启动：在仓库根目录执行 `uv run streamlit run src/mrisk/dashboard/app.py`。
+- **默认只有本机能访问**：仓库根目录的 `.streamlit/config.toml` 设了 `server.address = "localhost"`、`browser.gatherUsageStats = false`。
+  - 实测：只监听 127.0.0.1，从局域网 IP 访问被拒绝。
+  - 需要在局域网访问时，单次运行加 `--server.address 0.0.0.0`，不要改配置文件。
+  - 这个配置文件只在从仓库根目录启动时生效，Streamlit 按启动时的当前目录找 `.streamlit/`。
 - **看板只读，不重算风险。** 所有数字都来自 jobs 写入的表。SQLite 用 `mode=ro` 打开，写入会被数据库直接拒绝（有测试）。
 - 为了支撑看板，本段对上游做了两处改动：
   - **回测**：红绿灯边界改为由二项分布规则按 (p, 窗口长度) 推出，所有方法和置信度都写 zone；

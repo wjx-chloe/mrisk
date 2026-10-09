@@ -138,7 +138,8 @@ src/mrisk/dashboard/
 
 内容：
 - 一段话说明这是什么（"虚构组合在真实市场里的真实风险"：行情是真的，持仓由 mock 生成器造）；
-- 10 分钟上手：`uv sync` → `mrisk fetch-snapshot` → `mrisk demo` → 启动看板；
+- 10 分钟上手：`uv sync` → `mrisk fetch-snapshot` → `mrisk demo` → 启动看板（在仓库根目录启动，`.streamlit/config.toml` 默认只允许本机访问）；
+- 需要在局域网访问看板时怎么改：单次运行加 `--server.address 0.0.0.0`；
 - 数据流图；
 - 模块与 docs 的对应关系；
 - 如何切回 akshare 实时拉数；
