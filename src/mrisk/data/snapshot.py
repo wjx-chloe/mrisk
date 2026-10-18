@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import shutil
+import urllib.error
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -263,7 +264,13 @@ def fetch_snapshot(release: dict, release_dir: Path, snapshot_dir: Path, token: 
         log.info("%s already downloaded and verified", dest)
     else:
         log.info("downloading %s of %s (%s)", release["asset"], release["repo"], "with GITHUB_TOKEN" if token else "anonymous")
-        download(release["repo"], release["tag"], release["asset"], dest, token)
+        try:
+            download(release["repo"], release["tag"], release["asset"], dest, token)
+        except urllib.error.HTTPError as e:
+            hint = "; the repository may be private: set GITHUB_TOKEN" if e.code == 404 and not token else ""
+            raise SnapshotError(f"download of {release['asset']} ({release['tag']}) failed: HTTP {e.code} {e.reason}{hint}") from None
+        except urllib.error.URLError as e:
+            raise SnapshotError(f"download of {release['asset']} failed: {e.reason}") from None
         got = sha256_file(dest)
         if got != release["sha256"]:
             bad = dest.with_name(dest.name + ".bad")

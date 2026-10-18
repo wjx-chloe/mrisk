@@ -2,6 +2,7 @@ import copy
 import io
 import json
 import sys
+import urllib.error
 import zipfile
 
 import pandas as pd
@@ -194,6 +195,18 @@ def test_fetch_refuses_wrong_sha256(tmp_path, release, monkeypatch):
     with pytest.raises(snap.SnapshotError, match="sha256 of the download"):
         snap.fetch_snapshot(rel, tmp_path / "rel", tmp_path / "snap")
     assert not (tmp_path / "snap").exists() and (tmp_path / "rel" / (rel["asset"] + ".bad")).exists()
+
+
+def test_fetch_http_error_is_a_clear_error_with_private_hint(tmp_path, release, monkeypatch):
+    rel, _ = release
+    def not_found(req, timeout):
+        raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+    monkeypatch.setattr(snap, "_open", not_found)
+    with pytest.raises(snap.SnapshotError, match="HTTP 404 Not Found; the repository may be private: set GITHUB_TOKEN"):
+        snap.fetch_snapshot(rel, tmp_path / "rel", tmp_path / "snap")
+    with pytest.raises(snap.SnapshotError, match=r"HTTP 404 Not Found$"):
+        snap.fetch_snapshot(rel, tmp_path / "rel", tmp_path / "snap", token="t0k")
+    assert not list((tmp_path / "rel").iterdir())
 
 
 # ---- export -> replay, end to end on the fake world ------------------------------------------------------------
