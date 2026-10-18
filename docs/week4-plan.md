@@ -5,10 +5,11 @@
 
 ---
 
-## 0. 当前状态（2026-10-07）
+## 0. 当前状态（2026-10-18）
 
 - 第 1–3 周已验收：数据管道 + DQ、计量引擎、回测 + 归因、压测 + 限额。各周的设计说明在 `docs/`。
-- **4A 看板已完成，待用户验收**：见 `docs/week4a-dashboard.md`。下一步是 4B。
+- 4A 看板已完成：见 `docs/week4a-dashboard.md`。**4B 进行中**（2026-10-18 开工）。
+- 仓库：`https://github.com/wjx-chloe/mrisk`（第 4 周内私有，第 4 周结束时改为公开）。
 - 测试：228 个，全部通过（`uv run pytest -q`，1–3.5 分钟，随机器负载波动）。
 - 预置限额 5 条（`src/mrisk/limits/seed/limit_rule.csv`），最后一条是 2015 情景限额（损失 ≤ 市值 45%，warn 90%，含代理部分），见 `docs/week3b-stress-limits.md` §5.3。
 - README 仍是空的（4B 的活）。
@@ -45,6 +46,17 @@
 | 7 | 红绿灯：SPEC §5.4 同步为"边界由二项分布规则按 (p, 窗口长度) 推出"；参数法也写 zone |
 | 8 | 其余不变：入库，不在看板现算。`scenario.json` 为每个行业冲击加 raw 版本（`IND_<行业>_-10_RAW`）；top N 标明模式 |
 | 9 | 限额连续天数：遇到 no_data 的日子中断计数 |
+
+4B 开工时（2026-10-18）补充拍板：
+
+| # | 决定 |
+|---|---|
+| 10 | 第 4 周结束时把仓库改为公开。快照放在本仓库的 GitHub Release，不另建仓库 |
+| 11 | `fetch-snapshot` 默认匿名下载；环境变量里有 `GITHUB_TOKEN` 时带上，只用于私有期间测试下载流程 |
+| 12 | Release 由用户在网页上传：打好包后报 tag 名、文件名和 sha256，用户上传后在本地跑一遍 `fetch-snapshot` 验证 |
+| 13 | 全市场名单和申万成分原样保留，不裁剪 |
+| 14 | README 写明：行情经 akshare 取自公开网站，仅供学习研究，权利人要求即删除 |
+| 15 | README 和 docs 提到项目来源时，只写"参考券商市场风险系统的典型功能，用公开方法论自己设计"，不提任何文件 |
 
 规则核对：二项分布 B(250, p)，P(X ≤ k) < 95% 为绿，< 99.99% 为黄，其余为红。
 - p = 0.01：P(X ≤ 4) = 0.892，P(X ≤ 5) = 0.959，P(X ≤ 9) = 0.99975，P(X ≤ 10) = 0.99995；
@@ -110,7 +122,7 @@ src/mrisk/dashboard/
 
 ---
 
-## 3. 4B 离线样例 + README（现在只规划，不做）
+## 3. 4B 离线样例 + README（进行中）
 
 ### 3.1 快照与回放
 
@@ -119,12 +131,16 @@ src/mrisk/dashboard/
 - config 增加 `data.source: akshare | snapshot`，由 `etl.make_source` 选择。走快照时**完全不 import akshare**，akshare 改成延迟导入。
 - **`mrisk export-snapshot`**：从用户本机的 akshare 原始缓存（`data/raw/`，约 30 MB，含重复区间）导出快照，打包并输出 sha256。由用户把包上传到 GitHub Release。
   - 回放的输入就是当时拉到的原始数据，所以离线跑出来的数应与 docs 一致。这一点要核对。
+  - `data/raw` 里同一只股票有多个区间。**重叠部分的数值如果不一致，不静默挑一个，列出来报告给用户**；保留的区间要覆盖库里实际用到的全部日期。
   - 行情压缩后实测约 3.4 MB（81 只股票，2015-01 至 2026-09，22.9 万行）；加上复权因子和主数据，预计 5–10 MB。
 - **`mrisk fetch-snapshot`**：唯一联网的命令。从 Release 地址下载快照，按仓库里记录的 sha256 校验，解压到 `data/snapshot/`（在 `.gitignore` 里）。
   - 如果云端的网络策略连 GitHub Release 也不让下载，要先告诉用户。
+  - 默认匿名下载；有 `GITHUB_TOKEN` 时带上（§1 第 11 条）。
 - **`config.demo.yaml` 和 `mrisk demo`**：用快照做 backfill → risk → pnl → backtest → attribution → stress → limits，写到 `data/demo.db`，最后打印启动看板的命令。全程不联网。
   - **耗时要实测。** 全量 497 天里光压测就要 130 秒。如果全流程超过约 5 分钟，demo 配置缩短持仓期，但至少保留约 260 天，否则回测窗口一直处于 warming up。
 - **测试**：把 akshare 设为不可 import（`monkeypatch.setitem(sys.modules, "akshare", None)`），在一个极小快照上跑 `mrisk demo`，确认整条流程不联网。
+
+- **回放核对**：所有结果表逐行比对，只排除 `run_id`、`created_at` 这类运行元数据。同样的代码加同样的输入，预期逐位相同；不同的话，报告每张表的差异行数和最大差异。
 
 ### 3.2 回归测试（slow）
 
@@ -138,13 +154,16 @@ src/mrisk/dashboard/
 
 内容：
 - 一段话说明这是什么（"虚构组合在真实市场里的真实风险"：行情是真的，持仓由 mock 生成器造）；
-- 10 分钟上手：`uv sync` → `mrisk fetch-snapshot` → `mrisk demo` → 启动看板（在仓库根目录启动，`.streamlit/config.toml` 默认只允许本机访问）；
+- 最上面放 2–3 张看板整页截图。截图由用户自己截，放进 `docs/figures/` 后告知；
+- 10 分钟上手：`uv sync` → `mrisk fetch-snapshot` → `mrisk demo` → `mrisk dashboard`；
+- `mrisk dashboard` 以仓库根目录为工作目录启动 Streamlit，并显式传 `--server.address localhost`。安全默认不能取决于从哪个目录启动；
 - 需要在局域网访问看板时怎么改：单次运行加 `--server.address 0.0.0.0`；
 - 数据流图；
 - 模块与 docs 的对应关系；
 - 如何切回 akshare 实时拉数；
 - 已知局限；
-- 数据来源说明：行情经 akshare 取自公开网站，仅供学习研究。
+- 数据来源说明：行情经 akshare 取自公开网站，仅供学习研究，权利人要求即删除；
+- 项目来源只写"参考券商市场风险系统的典型功能，用公开方法论自己设计"，不提任何文件。
 
 ### 3.4 干净克隆计时
 
@@ -156,6 +175,9 @@ src/mrisk/dashboard/
 
 - `docs/week4-dashboard.md`：4A 和 4B 的设计说明（做了什么、关键取舍、怎么验证的），格式同前几周。
 - `docs/overview.md`：一页总览，包括架构、数据流和各周文档的索引。
+- 在 `docs/week4a-dashboard.md` §5 补两点：
+  - 全样本二项检验的单侧 p 值：HS99 ≈ 0.013，P99 ≈ 0.065，HS95 ≈ 0.12，P95（例外偏少的方向）≈ 0.14。
+  - 滚动窗口高度重叠：496 个观测、窗口 250，信息量大约只相当于两个互不重叠的窗口，黄灯天数和 Kupiec 拒绝天数不能当作相互独立的证据。
 - 不新写别的文档。
 
 ---
@@ -202,3 +224,17 @@ src/mrisk/dashboard/
 - 2015 情景的路径对每只股票是固定的：情景收益 r_i 不随持仓日变化。所以损失占比 L_t = Σ w_{i,t} r_i，变化量 ΔL = Σ Δw_i · r_i 是**精确恒等式**，没有交叉项。
 - 做法：对两段 warn（2026-01-05 至 02-04、02-06 至 03-06）各取一个基准日（warn 段开始前最后一个 ok 日）和峰值日，按行业汇总 Δw_i · r_i，看是哪些行业、哪些股票把损失推过了 40.5%。
 - 结果补进 `docs/week3b-stress-limits.md` §5.3：目前那里写的是"这两段的成因没有单独分解"。
+
+### 5.5 测试提速
+
+- 整轮测试只建一次假数据库模板文件，每个测试复制一份，不再逐个重建。
+- 只用假数据，适合云端做。
+
+### 5.6 进阶：波动率调整的历史模拟
+
+- 用 EWMA 波动率把历史收益缩放到当前水平，针对历史模拟 95%、99% 都偏激进的滞后问题。
+- 用 `docs/week4a-dashboard.md` 里同一张四格表（方法 × 置信度）验证改进效果。
+
+### 5.7 进阶：基于例外间隔的独立性检验（Christoffersen–Pelletier）
+
+- 一阶马尔可夫检验只能看见连续两天的例外，06-08 至 08-19 那种隔几天一次的扎堆它看不见。
