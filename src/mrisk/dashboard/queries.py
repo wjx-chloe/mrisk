@@ -5,10 +5,10 @@ import logging
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import Engine, create_engine, func, select
+from sqlalchemy import Engine, func, select
 
 from mrisk.db import schema as s
-from mrisk.db.repo import get_engine, read_frame
+from mrisk.db.repo import read_frame, readonly_engine  # noqa: F401  (readonly_engine: used by app.py)
 from mrisk.jobs import etl
 from mrisk.jobs.gate import dq_gate, stress_entry
 from mrisk.dashboard import transforms as tf
@@ -16,14 +16,6 @@ from mrisk.dashboard import transforms as tf
 log = logging.getLogger(__name__)
 
 RISK_COLS = ["market_value", "var_hs", "var_param", "es_hs"]
-
-
-def readonly_engine(url: str) -> Engine:
-    """SQLite is opened read-only (mode=ro), so the dashboard cannot write; other databases as given."""
-    prefix = "sqlite:///"
-    if url.startswith(prefix) and url != "sqlite:///:memory:":
-        return create_engine(f"{prefix}file:{url[len(prefix):]}?mode=ro&uri=true")
-    return get_engine(url)
 
 
 def active_rules(engine: Engine, pid: str) -> pd.DataFrame:

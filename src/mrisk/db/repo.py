@@ -20,6 +20,14 @@ def get_engine(url: str) -> Engine:
     return engine
 
 
+def readonly_engine(url: str) -> Engine:
+    """SQLite is opened read-only (mode=ro), so the reader cannot write; other databases as given."""
+    prefix = "sqlite:///"
+    if url.startswith(prefix) and url != "sqlite:///:memory:":
+        return create_engine(f"{prefix}file:{url[len(prefix):]}?mode=ro&uri=true")
+    return get_engine(url)
+
+
 def init_db(engine: Engine) -> None:
     metadata.create_all(engine)
 
