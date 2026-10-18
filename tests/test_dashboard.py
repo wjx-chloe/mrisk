@@ -139,7 +139,7 @@ def test_hbar_and_exception_calendar_and_limit_history():
 @pytest.fixture(scope="session")
 def built_world(tmp_path_factory):
     """Backfill and every job over the fake portfolio's dates; a short window (5) and backtest window (15) so that
-    backtest results exist. -> (database file, config dict without _root)."""
+    backtest results exist. -> (database file, config dict without the _root / _path load metadata)."""
     root = tmp_path_factory.mktemp("dash")
     with pytest.MonkeyPatch.context() as mp:
         engine, cfg = make_env(root, mp)
@@ -151,7 +151,7 @@ def built_world(tmp_path_factory):
                     stress_job.run_stress, limits_job.run_limits):
             run(engine, cfg, a, b)
     engine.dispose()
-    return root / "m.db", {k: v for k, v in cfg.items() if k != "_root"}
+    return root / "m.db", {k: v for k, v in cfg.items() if not k.startswith("_")}
 
 
 @pytest.fixture

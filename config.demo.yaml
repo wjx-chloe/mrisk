@@ -1,0 +1,77 @@
+# 离线样例的配置：回放 data/snapshot 里的快照，写 data/demo.db，全程不联网（mrisk demo）。
+# 除了标注「demo」的几项，其余必须与 config.yaml 相同（tests/test_demo.py 守着）。
+
+# 计量参数（SPEC §5.1；confidence 按 CLAUDE.md 决策 3 为列表）
+confidence: [0.95, 0.99]
+holding_period_days: 1
+lookback_days: 250
+backtest_window_days: 250   # 回测滚动窗口的观测数（SPEC §5.4）
+return_type: simple   # simple / log；组合损益按市值线性加权，默认简单收益（SPEC §5.1）
+parametric_dist: normal
+
+database:
+  url: sqlite:///data/demo.db  # demo
+
+data:
+  # akshare：联网拉数（缓存在 raw_cache_dir）；snapshot：回放 snapshot_dir 里的离线快照，全程不联网（见 config.demo.yaml）
+  source: snapshot  # demo
+  snapshot_dir: data/snapshot
+  # 行情从 2015 年起拉，覆盖 VaR 回望窗口、回测窗口和 2015/2018/2020 压力情景
+  price_start: 2015-01-01
+  raw_cache_dir: data/raw
+  # 本机 HTTPS_PROXY(127.0.0.1:7890) 访问国内行情站点会握手失败，拉数时绕过代理
+  bypass_proxy: true
+  request_interval_sec: 1.0
+  max_retries: 4
+  # 序列末尾缺行推断为停牌的前提：当日已有真实行情的股票占比不低于此值（防止整批未发布被误标停牌）
+  suspension_infer_min_coverage: 0.8
+  # mock 上游持仓系统的落地文件目录
+  position_feed_dir: data/demo/feed  # demo
+
+universe:
+  industries: [银行, 非银金融, 食品饮料, 医药生物, 电子, 电力设备, 有色金属, 计算机]
+  per_industry: 10
+  listed_before: 2015-01-01
+  # 经历过 920 号段切换的北交所股票（834682 -> 920682，2025-05-06 生效）
+  must_include: [BJ920682]
+
+portfolio:
+  portfolio_id: P001
+  name: 模拟A股组合
+  start: 2024-09-02
+  initial_capital: 100000000
+  n_holdings: 40
+  min_industries: 5
+  rebalance_weight_change: 0.10
+  swap_probability: 0.25
+  seed: 20240902
+
+scheduler:
+  daily_time: "16:30"
+
+dq:
+  blocking: [DQ02, DQ03, DQ07, DQ08, DQ09, DQ11]
+  # blocking 规则的作用域：按被检查的数据影响计算多久分类，每条 blocking 规则必须且只能归一类（docs/week2-engine.md §8）
+  #   price    行情，影响 lookback_days + 1 天：第 f 天失败，拦下并删除 f 及其后 lookback_days 个交易日
+  #   position 持仓，影响 1 天：只拦下并删除当天
+  #   static   静态参考数据，影响所有天：看该规则最近一次运行的结果，不看检查日期；失败则拦下并删除全部
+  # DQ11 失败分不清是持仓错还是价格错，按代价不对称归入 price
+  blocking_scope:
+    price: [DQ02, DQ03, DQ11]
+    position: [DQ07]
+    static: [DQ08, DQ09]
+  arrival_deadline: "17:00"
+  mv_change_max: 0.30
+  row_count_change_max: 0.05
+  price_limit_tolerance_pct: 0.001
+  # 除权日参考价由复权因子倒推，与交易所除权参考价（尤其配股）有偏差
+  price_limit_tolerance_pct_exdate: 0.005
+  price_limit_tolerance_abs: 0.01
+  new_listing_exempt_days: 5
+
+# demo：mrisk fetch-snapshot 下载的 GitHub Release 附件及其 sha256
+snapshot_release:
+  repo: wjx-chloe/mrisk
+  tag: snapshot-20260918
+  asset: mrisk-snapshot-20260918.zip
+  sha256: TO_BE_FILLED

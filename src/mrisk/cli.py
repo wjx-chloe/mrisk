@@ -1,11 +1,14 @@
 import argparse
 import logging
+import os
+import subprocess
 import sys
+from pathlib import Path
 
 import pandas as pd
 
-from mrisk.config import database_url, load_config
-from mrisk.db.repo import get_engine, init_db
+from mrisk.config import database_url, load_config, resolve_path
+from mrisk.db.repo import get_engine, init_db, readonly_engine
 from mrisk.jobs import daily as jobs
 from mrisk.jobs import etl, gate
 from mrisk.jobs import attribution as attribution_job
@@ -14,6 +17,8 @@ from mrisk.jobs import limits as limits_job
 from mrisk.jobs import pnl as pnl_job
 from mrisk.jobs import risk as risk_job
 from mrisk.jobs import stress as stress_job
+
+DEMO_CONFIG = "config.demo.yaml"
 
 # date-range jobs: name -> (help, run(engine, cfg, start, end) -> per-date status, no dates is an error,
 # statuses that are not errors)
@@ -53,10 +58,37 @@ def main(argv: list[str] | None = None) -> int:
         rg.add_argument("--start")
         r.add_argument("--end", help="with --start; defaults to --start")
     sub.add_parser("schedule", help="run the daily job every weekday at scheduler.daily_time (Asia/Shanghai)")
+    x = sub.add_parser("export-snapshot", help="pack the akshare raw cache into an offline snapshot zip and print its sha256")
+    x.add_argument("--out", default="data/release", help="output directory, relative to the config's directory")
+    sub.add_parser(
+        "fetch-snapshot",
+        help=f"download the snapshot release pinned in the config, check its sha256, unpack it (default config {DEMO_CONFIG})",
+    )
+    m = sub.add_parser("demo", help=f"the whole pipeline on the offline snapshot into a new database, no network (default config {DEMO_CONFIG})")
+    m.add_argument("--overwrite", action="store_true", help="delete the demo database first if it exists")
+    v = sub.add_parser("dashboard", help="start the Streamlit dashboard on the config's database, reachable from this machine only")
+    v.add_argument("--address", default="localhost", help="server address (default localhost; 0.0.0.0 opens it to the LAN)")
+    v.add_argument("--port", type=int)
+    c = sub.add_parser("diff-db", help="compare two databases row by row, run metadata left out (exit 2 when they differ)")
+    c.add_argument("a")
+    c.add_argument("b")
     args = ap.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    cfg = load_config(args.config)
+    if args.cmd == "diff-db":
+        return _diff_db(args.a, args.b)
+    config_path = args.config
+    if config_path is None and args.cmd in ("demo", "fetch-snapshot"):
+        config_path = os.environ.get("MRISK_CONFIG") or DEMO_CONFIG
+    cfg = load_config(config_path)
+    if args.cmd == "export-snapshot":
+        return _export_snapshot(cfg, resolve_path(cfg, args.out))
+    if args.cmd == "fetch-snapshot":
+        return _fetch_snapshot(cfg)
+    if args.cmd == "demo":
+        return _demo(cfg, args.overwrite)
+    if args.cmd == "dashboard":
+        return _dashboard(cfg, args.address, args.port)
     engine = get_engine(database_url(cfg))
     init_db(engine)
 
@@ -86,6 +118,95 @@ def main(argv: list[str] | None = None) -> int:
         run_forever(engine, cfg)
         return 0
     return 1
+
+
+def _export_snapshot(cfg, out: Path) -> int:
+    from mrisk.data.snapshot import SnapshotError, export_snapshot
+    from mrisk.db import schema as s
+    from mrisk.db.repo import read_frame
+
+    engine = readonly_engine(database_url(cfg))
+    inst = read_frame(engine, s.instrument, date_col="list_date", columns=["instrument_id", "exchange", "symbol"])
+    px = read_frame(engine, s.daily_price, columns=["trade_date", "instrument_id", "close", "is_suspended"])
+    try:
+        e = export_snapshot(resolve_path(cfg, cfg["data"]["raw_cache_dir"]), inst, px, out)
+    except SnapshotError as err:
+        logging.error("%s", err)
+        return 2
+    tag = e.zip_path.stem.replace("mrisk-snapshot-", "snapshot-")
+    for k, v in [("tag", tag), ("file", e.zip_path.name), ("size", f"{e.zip_path.stat().st_size:,} bytes"),
+                 ("sha256", e.sha256), ("path", e.zip_path)]:
+        print(f"{k:<8}{v}")
+    print(f"prices to {e.manifest['price_end']}, fetched {', '.join(e.manifest['fetched'])}, {len(e.manifest['files'])} files")
+    return 0
+
+
+def _fetch_snapshot(cfg) -> int:
+    from mrisk.data.snapshot import SnapshotError, fetch_snapshot
+
+    rel = cfg.get("snapshot_release")
+    if rel is None:
+        logging.error("%s has no snapshot_release section (it is in %s)", cfg["_path"], DEMO_CONFIG)
+        return 2
+    try:
+        fetch_snapshot(rel, resolve_path(cfg, "data/release"), resolve_path(cfg, cfg["data"]["snapshot_dir"]), os.environ.get("GITHUB_TOKEN") or None)
+    except SnapshotError as err:
+        logging.error("%s", err)
+        return 2
+    return 0
+
+
+def _demo(cfg, overwrite: bool) -> int:
+    from mrisk.jobs.demo import run_demo
+
+    url = database_url(cfg)
+    db = Path(url.removeprefix("sqlite:///")) if url.startswith("sqlite:///") else None
+    if db is not None and db.exists():
+        if not overwrite:
+            logging.error("%s already exists; delete it or pass --overwrite", db)
+            return 2
+        db.unlink()
+    engine = get_engine(url)
+    init_db(engine)
+    steps = run_demo(engine, cfg)
+    print(steps.to_string(index=False, float_format=lambda x: f"{x:.1f}"))
+    print(f"total {steps['seconds'].sum():.0f}s -> {db or url}")
+    print(f"dashboard: uv run mrisk --config {_config_arg(cfg)} dashboard")
+    return 0
+
+
+def _config_arg(cfg) -> str:
+    try:
+        return os.path.relpath(cfg["_path"])
+    except ValueError:  # another drive on Windows
+        return str(cfg["_path"])
+
+
+def _dashboard(cfg, address: str, port: int | None) -> int:
+    """Streamlit is started from the config's directory (the repository root, where .streamlit/config.toml lives),
+    and the address and usage-stats settings are passed explicitly as well, so the defaults hold from any directory."""
+    app = Path(__file__).resolve().parent / "dashboard" / "app.py"
+    cmd = [sys.executable, "-m", "streamlit", "run", str(app), "--server.address", address, "--browser.gatherUsageStats", "false"]
+    if port:
+        cmd += ["--server.port", str(port)]
+    env = {**os.environ, "MRISK_CONFIG": str(cfg["_path"])}
+    return subprocess.call(cmd, cwd=cfg["_root"], env=env)
+
+
+def _diff_db(a: str, b: str) -> int:
+    from mrisk.db.compare import RUN_METADATA, compare_databases, identical
+
+    for p in (a, b):
+        if not Path(p).exists():
+            logging.error("%s does not exist", p)
+            return 2
+    ea, eb = (readonly_engine(f"sqlite:///{Path(p).resolve().as_posix()}") for p in (a, b))
+    report = compare_databases(ea, eb)
+    with pd.option_context("display.width", 200, "display.max_columns", 20):
+        print(report.to_string(index=False))
+    same = identical(report)
+    print(f"left out: {', '.join(RUN_METADATA)} -> {'identical' if same else 'DIFFERENT'}")
+    return 0 if same else 2
 
 
 if __name__ == "__main__":
