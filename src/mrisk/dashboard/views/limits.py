@@ -3,7 +3,7 @@ import streamlit as st
 
 from mrisk.dashboard import charts
 from mrisk.dashboard import queries as q
-from mrisk.dashboard.common import LIMIT_LABEL, ctx, highlight_status, pct
+from mrisk.dashboard.common import LIMIT_LABEL, ctx, pct, status_dataframe
 
 c = ctx()
 st.header(f"限额 · {c.date:%Y-%m-%d}")
@@ -34,7 +34,7 @@ table = pd.DataFrame({
     "触发": ["今日新触发" if n else (f"已持续 {r} 天" if s in ("warn", "breach") else "") for n, r, s in zip(lim["new"], lim["run_days"], lim["status"])],
     "status": lim["status"],
 })
-st.dataframe(highlight_status(table).hide(["status"], axis="columns"), hide_index=True, width="stretch")
+status_dataframe(table)
 for r in lim.itertuples():
     det = r.detail if isinstance(r.detail, dict) else None
     if det and det.get("members"):

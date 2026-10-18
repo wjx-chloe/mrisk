@@ -2,7 +2,7 @@ import pandas as pd
 import streamlit as st
 
 from mrisk.dashboard import queries as q
-from mrisk.dashboard.common import LIMIT_LABEL, conf_label, ctx, highlight_status, pct, wan
+from mrisk.dashboard.common import LIMIT_LABEL, conf_label, ctx, pct, status_dataframe, wan
 
 c = ctx()
 st.header(f"总览 · {c.date:%Y-%m-%d}")
@@ -50,6 +50,6 @@ table = pd.DataFrame({
     "持续": [_run(r) for r in lim.itertuples()],
     "status": lim["status"],
 })
-st.dataframe(highlight_status(table).hide(["status"], axis="columns"), hide_index=True, width="stretch")
+status_dataframe(table)
 counts = lim["status"].value_counts()
 st.caption(" · ".join(f"{LIMIT_LABEL[k]} {counts.get(k, 0)}" for k in ("breach", "warn", "ok", "no_data")))

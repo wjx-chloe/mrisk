@@ -48,3 +48,9 @@ def highlight_status(df: pd.DataFrame, col: str = "status"):
         bg = BREACH_BG if r[col] == "breach" else WARN_BG if r[col] == "warn" else ""
         return [bg] * len(r)
     return df.style.apply(row_style, axis=1)
+
+
+def status_dataframe(df: pd.DataFrame, col: str = "status") -> None:
+    """st.dataframe with highlight_status rows; the raw status column drives the colours but is not shown.
+    column_order hides it: st.dataframe ignores Styler.hide."""
+    st.dataframe(highlight_status(df, col), hide_index=True, width="stretch", column_order=[c for c in df.columns if c != col])

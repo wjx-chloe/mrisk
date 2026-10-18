@@ -325,6 +325,7 @@ def test_overview_metrics_and_limit_lights_match_the_database(world):
     assert m["VaR 历史模拟 99%"].value == wan(rr.at[d, "var_hs"])
     assert m["ES 历史模拟 99%"].delta == f"{(rr.at[d, 'es_hs'] - rr.at[prev, 'es_hs']) / 1e4:+,.1f} 万"
     lights = at.dataframe[0].value.set_index("规则")
+    assert "status" not in at.dataframe[0].proto.column_order and "状态" in at.dataframe[0].proto.column_order
     lc = read_frame(engine, s.limit_check, d, d).set_index("rule_id")
     assert set(lights.index) == set(lc.index)
     for rid in lc.index:
@@ -358,6 +359,7 @@ def test_limits_page_separates_new_from_continuing(world):
     at = _app("limits")
     m = {x.label: x.value for x in at.metric}
     tab = at.dataframe[0].value.set_index("规则")
+    assert "status" not in at.dataframe[0].proto.column_order
     assert tab.at["L_CONC_INST", "触发"] == "今日新触发" and int(m["今日新触发"]) >= 1
     others = tab[(tab.index != "L_CONC_INST") & tab["status"].isin(["warn", "breach"])]
     assert all(v.startswith("已持续 ") for v in others["触发"])
