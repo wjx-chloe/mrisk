@@ -74,4 +74,4 @@ snapshot_release:
   repo: wjx-chloe/mrisk
   tag: snapshot-20260918
   asset: mrisk-snapshot-20260918.zip
-  sha256: TO_BE_FILLED
+  sha256: e55a3f1a6a31b752d7daec208e8eaf3497074bb732c37836e46acfa5adbaf3f8
