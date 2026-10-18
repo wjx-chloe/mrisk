@@ -2,6 +2,8 @@
 switch, ~80 trading days, SH600003 suspended on 2025-05-14, SH600004 across price_start."""
 
 import json
+import sys
+import types
 from pathlib import Path
 
 import numpy as np
@@ -70,9 +72,43 @@ class FakeSource:
         return pd.DataFrame({"effective_date": pd.to_datetime(["1900-01-01"]), "hfq_factor": [1.0]})
 
 
-def make_env(tmp_path: Path, monkeypatch) -> tuple:
+def fake_akshare(src: FakeSource) -> types.SimpleNamespace:
+    """The akshare functions AkshareSource calls, serving src's world in akshare's raw frame layout (Chinese column
+    names, string dates), so AkshareSource's own caching and normalisation run on it."""
+    lst = src.listings()
+    def listing(ex, code, name, date):
+        x = lst[lst["exchange"] == ex]
+        return pd.DataFrame({code: x["symbol"], name: x["name"], date: x["list_date"].dt.strftime("%Y-%m-%d")})
+    sw = src.sw_l1_members()
+    codes = {ind: f"8010{i:02d}" for i, ind in enumerate(sorted(sw["industry_l1"].unique()))}
+    def components(symbol):
+        x = sw[sw["industry_l1"] == {c: i for i, c in codes.items()}[symbol]]
+        return pd.DataFrame({"证券代码": x["symbol"], "最新权重": x["sw_weight"]})
+    def daily(symbol, start_date=None, end_date=None, adjust=""):
+        ex, sym = symbol[:2].upper(), symbol[2:]
+        if adjust == "hfq-factor":
+            f = src.hfq_factor(ex, sym)
+            return pd.DataFrame({"date": f["effective_date"].dt.strftime("%Y-%m-%d"), "hfq_factor": f["hfq_factor"].astype(str)})
+        d = src.daily_raw(ex, sym, pd.Timestamp(start_date), pd.Timestamp(end_date))
+        return pd.DataFrame({"date": d["trade_date"].dt.strftime("%Y-%m-%d"), "open": d["close"], "close": d["close"],
+                             "volume": d["volume"].astype(float)})
+    return types.SimpleNamespace(
+        tool_trade_date_hist_sina=lambda: pd.DataFrame({"trade_date": CAL.strftime("%Y-%m-%d")}),
+        stock_info_sh_name_code=lambda symbol: listing("SH", "证券代码", "证券简称", "上市日期").iloc[: 0 if symbol == "科创板" else None],
+        stock_info_sz_name_code=lambda symbol: listing("SZ", "A股代码", "A股简称", "A股上市日期"),
+        stock_info_bj_name_code=lambda: listing("BJ", "证券代码", "证券简称", "上市日期"),
+        stock_info_sh_delist=lambda symbol: pd.DataFrame({"公司代码": src.delisted().query("exchange == 'SH'")["symbol"]}),
+        stock_info_sz_delist=lambda symbol: pd.DataFrame({"证券代码": src.delisted().query("exchange == 'SZ'")["symbol"]}),
+        sw_index_first_info=lambda: pd.DataFrame({"行业代码": [f"{c}.SI" for c in codes.values()], "行业名称": list(codes)}),
+        index_component_sw=components,
+        stock_zh_a_daily=daily,
+    )
+
+
+def make_env(tmp_path: Path, monkeypatch, source: str = "fake") -> tuple:
     """Config + empty database for the fake world under tmp_path; seeds, scenarios, rules and the source patched in
-    with monkeypatch (a pytest MonkeyPatch). The calendar holds ~80 trading days."""
+    with monkeypatch (a pytest MonkeyPatch). The calendar holds ~80 trading days. source="fake" patches FakeSource in
+    as the source; source="akshare" keeps the real AkshareSource (cache in tmp_path/raw) over fake_akshare."""
     cfg = load_config("config.yaml")
     cfg["_root"] = tmp_path
     cfg["data"]["price_start"] = "2025-03-10"
@@ -102,7 +138,12 @@ def make_env(tmp_path: Path, monkeypatch) -> tuple:
     )
     monkeypatch.setattr(limits_job, "SEED", rules)
     src = FakeSource()
-    monkeypatch.setattr(etl, "make_source", lambda cfg: src)
+    if source == "fake":
+        monkeypatch.setattr(etl, "make_source", lambda cfg: src)
+    else:
+        monkeypatch.setitem(sys.modules, "akshare", fake_akshare(src))
+        cfg["data"].update(source="akshare", raw_cache_dir="raw", request_interval_sec=0)
+        src = etl.make_source(cfg)
     engine = get_engine(f"sqlite:///{(tmp_path / 'm.db').as_posix()}")
     init_db(engine)
     etl.build_universe_seed(cfg, src)
