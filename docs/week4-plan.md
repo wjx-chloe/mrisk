@@ -8,9 +8,10 @@
 ## 0. 当前状态（2026-10-18）
 
 - 第 1–3 周已验收：数据管道 + DQ、计量引擎、回测 + 归因、压测 + 限额。各周的设计说明在 `docs/`。
-- 4A 看板已完成：见 `docs/week4a-dashboard.md`。**4B 已完成，待用户验收**：见 `docs/week4b-offline-demo.md`；Release 上传后还要跑一遍 `fetch-snapshot` 验证。
+- 4A 看板、4B 离线样例已完成并验收：见 `docs/week4a-dashboard.md`、`docs/week4b-offline-demo.md`。Release `snapshot-20260918` 已上传，`fetch-snapshot` 已验证。
+- **4C 已完成，待用户验收**（2026-10-18）：`docs/overview.md`；4A 文档 §5、3B 文档 §5.3 的补充。仓库公开前先过一遍检查清单，用户确认后才改为公开。
 - 仓库：`https://github.com/wjx-chloe/mrisk`（第 4 周内私有，第 4 周结束时改为公开）。
-- 测试：250 个，全部通过（`uv run pytest -q`，1.5–4 分钟，随机器负载波动）；另有 3 个 slow 回归测试，跑在 `MRISK_REGRESSION_DB` 指定的库上。
+- 测试：251 个，全部通过（`uv run pytest -q`，1.5–4 分钟，随机器负载波动）；另有 3 个 slow 回归测试，跑在 `MRISK_REGRESSION_DB` 指定的库上。
 - 预置限额 5 条（`src/mrisk/limits/seed/limit_rule.csv`），最后一条是 2015 情景限额（损失 ≤ 市值 45%，warn 90%，含代理部分），见 `docs/week3b-stress-limits.md` §5.3。
 
 ### 0.1 环境约束（云端 session 必读）
@@ -173,7 +174,7 @@ src/mrisk/dashboard/
 
 ---
 
-## 4. 4C docs 收尾
+## 4. 4C docs 收尾（已完成，落地情况见本节末）
 
 - `docs/week4-dashboard.md`：4A 和 4B 的设计说明（做了什么、关键取舍、怎么验证的），格式同前几周。
 - `docs/overview.md`：一页总览，包括架构、数据流和各周文档的索引。
@@ -181,6 +182,15 @@ src/mrisk/dashboard/
   - 全样本二项检验的单侧 p 值：HS99 ≈ 0.013，P99 ≈ 0.065，HS95 ≈ 0.12，P95（例外偏少的方向）≈ 0.14。
   - 滚动窗口高度重叠：496 个观测、窗口 250，信息量大约只相当于两个互不重叠的窗口，黄灯天数和 Kupiec 拒绝天数不能当作相互独立的证据。
 - 不新写别的文档。
+- 3B 文档 §5.3 补"25% 不可行"的论证（原 backlog §5.3，用户在 4C 开工时并入）。
+- `docs/overview.md` 的各周索引要覆盖 week4a 和 week4b 两份文档。
+
+**落地（2026-10-18）**：
+- 第 4 周的设计说明就是已有的 `docs/week4a-dashboard.md` 和 `docs/week4b-offline-demo.md`，没有再合并出一份 `week4-dashboard.md`：两份都已验收，合并只会重复，overview 的索引直接指向它们。
+- `docs/overview.md`：架构、数据流、关键取舍、关键数字、各周文档索引。
+- 4A 文档 §5：全样本单侧二项检验表（在 demo 库上用 `scipy.stats.binom` 重算，与用户给的近似值一致）；滚动窗口重叠的说明。
+- 3B 文档 §5.3：股票池等权收益（两种口径，标明不是指数）、只做多头无对冲、降仓到约 65% 的推算。没有用 β 1.22 来推：那是 2026-09-18 的近 250 日窗口算出来的，不是 2015 年的。
+- README：已知局限里历史模拟法那条改为按全样本检验的结果写；加了 overview 的链接。
 
 ---
 
@@ -215,7 +225,7 @@ src/mrisk/dashboard/
 - "配置错误"用新状态 `config_error` 表示，还是用 no_data 加上 `detail.reason = "config_error: …"`？前者要改 `limit_check` 的约束和 SPEC §3.8。
 - 种子校验失败时，是拒绝加载整张表，还是只停用出问题的规则？
 
-### 5.3 docs §5.3 的"25% 不可行"论证
+### 5.3 docs §5.3 的"25% 不可行"论证（已在 4C 完成，见 §4）
 
 - 用户要求写明：同期指数跌了三成多，组合只做多头，没有对冲手段。
 - **现状：没写全。** 现在只有"25% 相当于要求留约三分之一现金，是在否定策略本身"，没有"同期指数跌三成多"和"只做多头、无对冲"这两点。
