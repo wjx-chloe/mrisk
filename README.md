@@ -93,6 +93,10 @@ uv run mrisk dashboard
 - **看板的只读只对 SQLite 生效**；换 PostgreSQL 要另配只读账号。
 - 不做：债券 / 期权 / 期货、空头、权限与多用户、邮件告警（breach 只写日志并在看板红色高亮）。
 
+## 开发方式
+
+本项目用 Claude Code 开发。[SPEC.md](SPEC.md) 是需求规格，[CLAUDE.md](CLAUDE.md) 是工作守则；每个模块都经作者验收后才进入下一个，各模块的设计说明在 `docs/`。
+
 ## 开发
 
 ```sh
@@ -104,3 +108,7 @@ MRISK_REGRESSION_DB=data/demo.db uv run pytest -m slow   # 在 demo 库上核对
 ## 数据来源与声明
 
 行情经 akshare 取自公开网站，仅供学习研究，权利人要求即删除。持仓和组合均为虚构，不构成任何投资建议。
+
+## 许可
+
+代码以 [MIT 许可](LICENSE) 发布。MIT 只覆盖代码：Release 里的行情快照不在 MIT 范围内，适用上面的数据来源声明。
