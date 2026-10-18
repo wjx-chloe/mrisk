@@ -168,6 +168,9 @@ src/mrisk/dashboard/
 
 在云端 session 里做：新 clone → 按 README 从头执行并计时，记录每一步的耗时。
 
+- **等仓库公开后再做，不给云端 `GITHUB_TOKEN`**（2026-10-18 拍板）。陌生人就是匿名下载，测试也该用匿名下载。
+- 匿名 `fetch-snapshot` 从现在的 404 变成 200，本身就是一项验收。
+
 ---
 
 ## 4. 4C docs 收尾
