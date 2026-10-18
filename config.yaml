@@ -16,7 +16,7 @@ data:
   # 行情从 2015 年起拉，覆盖 VaR 回望窗口、回测窗口和 2015/2018/2020 压力情景
   price_start: 2015-01-01
   raw_cache_dir: data/raw
-  # 本机 HTTPS_PROXY(127.0.0.1:7890) 访问国内行情站点会握手失败，拉数时绕过代理
+  # 如本机设了代理导致国内站点握手失败，可开启此项：拉数时绕过代理直连
   bypass_proxy: true
   request_interval_sec: 1.0
   max_retries: 4
