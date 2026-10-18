@@ -8,11 +8,10 @@
 ## 0. 当前状态（2026-10-18）
 
 - 第 1–3 周已验收：数据管道 + DQ、计量引擎、回测 + 归因、压测 + 限额。各周的设计说明在 `docs/`。
-- 4A 看板已完成：见 `docs/week4a-dashboard.md`。**4B 进行中**（2026-10-18 开工）。
+- 4A 看板已完成：见 `docs/week4a-dashboard.md`。**4B 已完成，待用户验收**：见 `docs/week4b-offline-demo.md`；Release 上传后还要跑一遍 `fetch-snapshot` 验证。
 - 仓库：`https://github.com/wjx-chloe/mrisk`（第 4 周内私有，第 4 周结束时改为公开）。
-- 测试：228 个，全部通过（`uv run pytest -q`，1–3.5 分钟，随机器负载波动）。
+- 测试：250 个，全部通过（`uv run pytest -q`，1.5–4 分钟，随机器负载波动）；另有 3 个 slow 回归测试，跑在 `MRISK_REGRESSION_DB` 指定的库上。
 - 预置限额 5 条（`src/mrisk/limits/seed/limit_rule.csv`），最后一条是 2015 情景限额（损失 ≤ 市值 45%，warn 90%，含代理部分），见 `docs/week3b-stress-limits.md` §5.3。
-- README 仍是空的（4B 的活）。
 
 ### 0.1 环境约束（云端 session 必读）
 
@@ -122,7 +121,7 @@ src/mrisk/dashboard/
 
 ---
 
-## 3. 4B 离线样例 + README（进行中）
+## 3. 4B 离线样例 + README（已完成，以下为当时的规划；实际落地见 `docs/week4b-offline-demo.md`）
 
 ### 3.1 快照与回放
 
