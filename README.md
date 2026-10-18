@@ -63,7 +63,7 @@ flowchart LR
 | 监控看板（8 个页面） | `src/mrisk/dashboard/` | [docs/week4a-dashboard.md](docs/week4a-dashboard.md) |
 | 离线快照、demo、回放核对 | `src/mrisk/data/snapshot.py`、`src/mrisk/jobs/demo.py`、`src/mrisk/db/compare.py` | [docs/week4b-offline-demo.md](docs/week4b-offline-demo.md) |
 
-需求规格见 [SPEC.md](SPEC.md)。
+需求规格见 [SPEC.md](SPEC.md)；一页总览（架构、数据流、各周文档索引）见 [docs/overview.md](docs/overview.md)。
 
 ## 切回 akshare 实时拉数
 
@@ -89,7 +89,7 @@ uv run mrisk dashboard
 - **DQ 门禁按日期判断，不按股票**：任意一只股票的价格类规则失败，会拦下窗口覆盖这一天的所有风险日。偏保守。
 - **压测的因子池是股票池内的 81 只**，不是市场指数；未上市、停牌的股票走同行业代理，代理平均无偏，单只股票不准。
 - **假设情景每次只冲击一个因子**（`raw` 模式除外）。
-- **历史模拟法 95%、99% 在样本期都偏激进**（例外偏多），见 4A 文档的回测四格表。
+- **历史模拟法在样本期偏激进**：95%、99% 的例外都偏多，全样本二项检验下 99% 显著（单侧 p ≈ 0.013），95% 不显著（p ≈ 0.12）。见 [4A 文档 §5](docs/week4a-dashboard.md)。
 - **看板的只读只对 SQLite 生效**；换 PostgreSQL 要另配只读账号。
 - 不做：债券 / 期权 / 期货、空头、权限与多用户、邮件告警（breach 只写日志并在看板红色高亮）。
 
