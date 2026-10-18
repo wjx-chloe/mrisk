@@ -1,4 +1,6 @@
-"""akshare wrappers: the only module in the project that touches the network.
+"""Market data sources. AkshareSource wraps akshare and is the only class in the project that touches the network
+(akshare is imported on the first call, never at import time). SnapshotSource replays an offline snapshot of
+AkshareSource's raw cache (mrisk export-snapshot) through the same normalisation, with no network.
 
 Prices come from akshare's Sina endpoints (stock_zh_a_daily): Eastmoney blocks this
 host and Tencent does not cover the Beijing exchange.
@@ -195,3 +197,39 @@ class AkshareSource:
             lambda: self._call("stock_zh_a_daily", symbol=sina, adjust="hfq-factor").astype(str),
         )
         return norm_hfq_factor(raw)
+
+
+class SnapshotSource:
+    """Same six methods as AkshareSource, read from a snapshot directory (see mrisk.data.snapshot): one parquet per
+    raw cache key with the fetch date dropped, the raw akshare frames unchanged, so the same norm_* functions run on
+    the same input. A missing file is an error, never a network fetch."""
+
+    def __init__(self, snapshot_dir: str | Path):
+        self.dir = Path(snapshot_dir)
+        if not (self.dir / "manifest.json").exists():
+            raise FileNotFoundError(f"no snapshot in {self.dir} (manifest.json missing); run mrisk fetch-snapshot")
+
+    def _read(self, key: str) -> pd.DataFrame:
+        return pd.read_parquet(self.dir / f"{key}.parquet")
+
+    def trade_calendar(self) -> pd.DataFrame:
+        return norm_trade_calendar(self._read("calendar"))
+
+    def listings(self) -> pd.DataFrame:
+        return norm_listings(self._read("list_sh_main"), self._read("list_sh_star"), self._read("list_sz"), self._read("list_bj"))
+
+    def delisted(self) -> pd.DataFrame:
+        return norm_delisted(self._read("delist_sh"), self._read("delist_sz"))
+
+    def sw_l1_members(self) -> pd.DataFrame:
+        first = self._read("sw_l1")
+        return norm_sw_members({name: self._read(f"sw_comp_{code.split('.')[0]}") for code, name in zip(first["行业代码"], first["行业名称"])})
+
+    def daily_raw(self, exchange: str, symbol: str, start: dt.date, end: dt.date) -> pd.DataFrame:
+        """The rows Sina returns for [start, end] (both inclusive)."""
+        raw = self._read(f"daily_{exchange}{symbol}")
+        d = to_ns(raw["date"])
+        return norm_daily(raw[(d >= pd.Timestamp(start)) & (d <= pd.Timestamp(end))])
+
+    def hfq_factor(self, exchange: str, symbol: str) -> pd.DataFrame:
+        return norm_hfq_factor(self._read(f"hfq_{exchange}{symbol}"))

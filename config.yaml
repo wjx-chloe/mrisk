@@ -10,6 +10,9 @@ database:
   url: sqlite:///data/mrisk.db
 
 data:
+  # akshare：联网拉数（缓存在 raw_cache_dir）；snapshot：回放 snapshot_dir 里的离线快照，全程不联网（见 config.demo.yaml）
+  source: akshare
+  snapshot_dir: data/snapshot
   # 行情从 2015 年起拉，覆盖 VaR 回望窗口、回测窗口和 2015/2018/2020 压力情景
   price_start: 2015-01-01
   raw_cache_dir: data/raw

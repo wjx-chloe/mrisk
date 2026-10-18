@@ -11,7 +11,7 @@ from mrisk.config import resolve_path
 from mrisk.data import mock_positions as mock
 from mrisk.data.code_map import resolve_instrument_id
 from mrisk.data.dq import RULES, DQContext, blocked_dates, run_rules
-from mrisk.data.sources import AkshareSource
+from mrisk.data.sources import AkshareSource, SnapshotSource
 from mrisk.data.transform import build_daily_price
 from mrisk.data.universe import build_instruments, select_universe
 from mrisk.db import schema as s
@@ -22,14 +22,21 @@ log = logging.getLogger(__name__)
 SEED_DIR = Path(__file__).resolve().parents[1] / "data" / "seed"
 CST = dt.timezone(dt.timedelta(hours=8))
 PRICE_CONTEXT_DAYS = 15
+Source = AkshareSource | SnapshotSource
 
 
 def now_cst() -> dt.datetime:
     return dt.datetime.now(CST).replace(tzinfo=None, microsecond=0)
 
 
-def make_source(cfg) -> AkshareSource:
+def make_source(cfg) -> Source:
+    """data.source picks the source: akshare (live, cached in raw_cache_dir) or snapshot (offline replay of
+    snapshot_dir, see mrisk fetch-snapshot)."""
     d = cfg["data"]
+    if d["source"] == "snapshot":
+        return SnapshotSource(resolve_path(cfg, d["snapshot_dir"]))
+    if d["source"] != "akshare":
+        raise ValueError(f"data.source must be akshare or snapshot, got {d['source']!r}")
     return AkshareSource(
         resolve_path(cfg, d["raw_cache_dir"]),
         request_interval_sec=d["request_interval_sec"],
@@ -50,7 +57,7 @@ def trading_days(engine: Engine, start=None, end=None) -> pd.DatetimeIndex:
     return pd.DatetimeIndex(cal["trade_date"]).sort_values()
 
 
-def build_universe_seed(cfg, src: AkshareSource) -> pd.DataFrame:
+def build_universe_seed(cfg, src: Source) -> pd.DataFrame:
     u = cfg["universe"]
     uni = select_universe(
         src.listings(), src.sw_l1_members(), u["industries"], u["per_industry"],
@@ -60,11 +67,11 @@ def build_universe_seed(cfg, src: AkshareSource) -> pd.DataFrame:
     return uni
 
 
-def fetch_trade_calendar(engine: Engine, src: AkshareSource) -> int:
+def fetch_trade_calendar(engine: Engine, src: Source) -> int:
     return upsert(engine, s.trade_calendar, src.trade_calendar())
 
 
-def fetch_instruments(engine: Engine, src: AkshareSource) -> int:
+def fetch_instruments(engine: Engine, src: Source) -> int:
     inst = build_instruments(
         load_seed("universe.csv"), src.listings(), src.sw_l1_members(), src.delisted(),
         load_seed("industry_override.csv")[["instrument_id", "industry_l1"]],
@@ -76,7 +83,7 @@ def apply_code_map(engine: Engine) -> int:
     return upsert(engine, s.instrument_code_map, load_seed("code_map.csv"))
 
 
-def fetch_prices(engine: Engine, src: AkshareSource, start, end, load_type: str, min_coverage: float) -> int:
+def fetch_prices(engine: Engine, src: Source, start, end, load_type: str, min_coverage: float) -> int:
     """Writes daily_price rows in [start, end]. The full earlier history is used as context (Sina returns
     it in the same request) so a suspension spanning the window start carries the last real close.
     Series ending before `end` are inferred as suspended (see infer_trailing_suspensions) and logged."""
