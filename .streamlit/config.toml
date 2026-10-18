@@ -1,8 +1,12 @@
-# Streamlit reads this file from the directory it is started in (run from the repo root).
+# Streamlit reads this file from the directory it is started in; `mrisk dashboard` starts it from the repo root.
 [server]
 # Only this machine can open the dashboard. To reach it from the LAN, override per run:
-#   uv run streamlit run src/mrisk/dashboard/app.py --server.address 0.0.0.0
+#   uv run mrisk dashboard --address 0.0.0.0
 address = "localhost"
 
 [browser]
 gatherUsageStats = false
+
+[client]
+# Hide the developer options (Deploy, Rerun, Clear cache); keep the viewer ones (print, theme).
+toolbarMode = "viewer"
