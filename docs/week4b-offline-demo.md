@@ -132,7 +132,11 @@
 
 ## 8. 还没做 / 待确认
 
-1. **Release 未上传**：tag `snapshot-20260918`，文件 `mrisk-snapshot-20260918.zip`，sha256 `e55a3f1a6a31b752d7daec208e8eaf3497074bb732c37836e46acfa5adbaf3f8`。上传后在本机跑一遍 `fetch-snapshot` 验证。
+1. ~~Release 未上传~~ 2026-10-18 已上传并验证：tag `snapshot-20260918`，文件 `mrisk-snapshot-20260918.zip`，sha256 `e55a3f1a6a31b752d7daec208e8eaf3497074bb732c37836e46acfa5adbaf3f8`。在本机先移走本地那份 zip，再跑 `fetch-snapshot`：
+   - 匿名：HTTP 404（仓库仍私有），报错并提示设 `GITHUB_TOKEN`，退出码 2；
+   - 带 `GITHUB_TOKEN`（只在该条命令的环境变量里）：经 API 下载，sha256 相符，与本地导出的 zip 逐字节相同，201 个文件核对清单后解压；
+   - 再跑一次：已有校验过的文件，不再下载；
+   - 检查过 `data/`、仓库文件和日志，token 不在任何文件里。
 2. **README 截图**：等用户放进 `docs/figures/`。
 3. **干净克隆计时**（规划 §3.4）：在云端做。要等 Release 上传；仓库仍是私有期间，需要给云端 `GITHUB_TOKEN`。
 4. **默认配置**：`demo` / `fetch-snapshot` 默认用 `config.demo.yaml`、看板要显式传 `--config`（§4），这是我定的，可以改。
