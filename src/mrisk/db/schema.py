@@ -100,6 +100,8 @@ risk_result = Table(
     Column("var_hs", Float),
     Column("var_param", Float),
     Column("es_hs", Float),
+    # Euler contribution to the portfolio ES (the portfolio row: the ES itself); nullable, added after the first release
+    Column("es_hs_contrib", Float),
     Column("run_id", Text, nullable=False),
     PrimaryKeyConstraint("trade_date", "portfolio_id", "level", "level_key", "confidence"),
     CheckConstraint("level IN ('portfolio','industry','instrument')", name="ck_risk_level"),

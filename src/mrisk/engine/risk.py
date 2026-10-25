@@ -7,9 +7,9 @@ import pandas as pd
 
 from mrisk.engine.returns import returns_window
 from mrisk.engine.valuation import exposure_matrix, market_value
-from mrisk.engine.var import hs_es, hs_var, param_var
+from mrisk.engine.var import hs_es, hs_es_components, hs_var, param_var
 
-RESULT_COLUMNS = ["level", "level_key", "confidence", "market_value", "var_hs", "var_param", "es_hs", "es_tail_n"]
+RESULT_COLUMNS = ["level", "level_key", "confidence", "market_value", "var_hs", "var_param", "es_hs", "es_hs_contrib", "es_tail_n"]
 
 
 @dataclass(frozen=True)
@@ -32,7 +32,11 @@ def compute_risk(
     prices[trade_date, instrument_id, close, adj_close, is_suspended] covering the window (extra rows are ignored);
     instruments[instrument_id, industry_l1].
     Rows are ordered portfolio, industries, instruments, and by confidence within each unit.
-    VaR is not additive across levels and nothing here assumes it is. es_tail_n = 0 marks ES = VaR fallback."""
+    VaR is not additive across levels and nothing here assumes it is. es_tail_n = 0 marks ES = VaR fallback.
+    es_hs_contrib: the unit's Euler contribution to the portfolio ES at that confidence, minus the unit's mean P&L
+    over the portfolio's tail days (the days the portfolio ES averages); the portfolio row carries the ES itself.
+    The instruments' contributions sum to the portfolio ES, and so do the industries'. A contribution can be
+    negative. VaR gets no such split: it rests on the two scenario days the quantile interpolates."""
     asof = pd.Timestamp(asof)
     conf = np.sort(np.atleast_1d(np.asarray(confidence, dtype=float)))
     held = sorted(positions["instrument_id"].unique())
@@ -50,6 +54,8 @@ def compute_risk(
     var = hs_var(pnl, conf)
     es, n_tail = hs_es(pnl, var)
     pvar = param_var(Rm, E, conf)
+    contrib = hs_es_components(pnl, pnl[:, 0], var[:, 0], conf)  # column 0 is the portfolio
+    contrib[:, 0] = es[:, 0]
 
     C = len(conf)
     table = units.loc[units.index.repeat(C)].reset_index(drop=True)
@@ -58,5 +64,6 @@ def compute_risk(
     table["var_hs"] = var.T.ravel()
     table["var_param"] = pvar.T.ravel()
     table["es_hs"] = es.T.ravel()
+    table["es_hs_contrib"] = contrib.T.ravel()
     table["es_tail_n"] = n_tail.T.ravel()
     return RiskResult(table[RESULT_COLUMNS], suspended_days)

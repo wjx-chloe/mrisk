@@ -130,6 +130,7 @@
 | var_hs | numeric | 历史模拟法 VaR，1 日，置信度见 confidence |
 | var_param | numeric | 参数法 VaR |
 | es_hs | numeric | 历史模拟法 ES |
+| es_hs_contrib | numeric | 对组合 ES 的 Euler 贡献（同一置信度）：组合尾部场景日（组合损益 < −VaR_hs，即 ES 取平均的那些天）上该单元损益的平均，取负号使损失为正。组合级等于 es_hs；个股级之和、行业级之和都等于组合 es_hs；可为负（该单元在尾部场景下平均盈利）。尾部为空（ES = VaR）时取 VaR 的 Euler 分量。VaR 不做同类分解：它只取决于分位数插值的两个场景日，太不稳定 |
 | run_id | text | 本次计算批次 |
 
 回测用的损益不放在这张表里，见 §3.12 pnl_hypo。
