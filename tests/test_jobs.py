@@ -146,6 +146,12 @@ def test_risk_job_writes_all_levels_and_bj_series_is_continuous_across_920_switc
     bj = rr[rr["level_key"] == "BJ920682"].set_index("confidence")
     assert bj.loc[0.99, "var_hs"] == pytest.approx(-np.quantile(mv * r.to_numpy(), 0.01), rel=1e-12)
     assert bj.loc[0.95, "var_param"] == pytest.approx(1.6448536269514722 * mv * r.std(ddof=1), rel=1e-12)
+    # ES contributions are stored with the rows: on each level they sum to the portfolio ES
+    for c, g in rr.groupby("confidence"):
+        es = g.loc[g["level"] == "portfolio", "es_hs"].iloc[0]
+        assert g.loc[g["level"] == "portfolio", "es_hs_contrib"].iloc[0] == es
+        for level in ("industry", "instrument"):
+            assert g.loc[g["level"] == level, "es_hs_contrib"].sum() == pytest.approx(es, rel=1e-12)
 
 
 def test_risk_job_rerun_replaces_the_date(risk_env):

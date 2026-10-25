@@ -95,6 +95,31 @@ def test_compute_risk_matches_hand_calculation_to_4_decimals():
     np.testing.assert_allclose(hi["var_param"], EXPECTED["p99"], **tol)
     assert (t["es_tail_n"] == 1).all()
     assert res.suspended_days.to_dict() == {"A": 0, "B": 0, "C": 0}
+    # ES contributions: the portfolio tail is the 7th return day alone (P -920) at both levels, so each unit contributes minus its
+    # P&L that day: A 300, B 440, C 180; 银行 740, 电子 180; the portfolio row is the ES, 920.
+    # C's standalone ES is 270 (its own worst day, the 3rd), but on the portfolio's worst day it lost 180.
+    contrib = [920.0, 180.0, 740.0, 300.0, 440.0, 180.0]
+    np.testing.assert_allclose(lo["es_hs_contrib"], contrib, **tol)
+    np.testing.assert_allclose(hi["es_hs_contrib"], contrib, **tol)
+
+
+def test_es_contributions_add_up_to_the_portfolio_es_on_every_level():
+    """The Euler identity: the instruments' contributions sum to the portfolio ES, so do the industries'. Standalone
+    ES is not additive (and need not be), the contributions are."""
+    rng = np.random.default_rng(11)
+    names = [f"S{i:02d}" for i in range(30)]
+    ret = {n: list(rng.standard_t(4, 250) * 0.02) for n in names}
+    prices, dates = make_prices(ret, {n: 10.0 + i for i, n in enumerate(names)})
+    pos = pd.DataFrame({"instrument_id": names, "quantity": rng.integers(1, 50, 30) * 100.0})
+    inst = pd.DataFrame({"instrument_id": names, "industry_l1": [["银行", "电子", "计算机"][i % 3] for i in range(30)]})
+    t = compute_risk(pos, prices, inst, dates[-1], "P", CONF, 250).table
+    for c in CONF:
+        tc = t[t["confidence"] == c]
+        es = tc.loc[tc["level"] == "portfolio", "es_hs"].iloc[0]
+        assert tc.loc[tc["level"] == "portfolio", "es_hs_contrib"].iloc[0] == es
+        assert tc.loc[tc["level"] == "instrument", "es_hs_contrib"].sum() == pytest.approx(es, rel=1e-12)
+        assert tc.loc[tc["level"] == "industry", "es_hs_contrib"].sum() == pytest.approx(es, rel=1e-12)
+        assert tc.loc[tc["level"] == "instrument", "es_hs"].sum() > es  # standalone figures do not add up
 
 
 def test_var_is_not_additive_across_levels_diversification():
