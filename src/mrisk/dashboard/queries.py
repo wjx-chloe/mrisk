@@ -8,7 +8,7 @@ import pandas as pd
 from sqlalchemy import Engine, func, select
 
 from mrisk.db import schema as s
-from mrisk.db.repo import read_frame, readonly_engine  # noqa: F401  (readonly_engine: used by app.py)
+from mrisk.db.repo import missing_columns, read_frame, readonly_engine  # noqa: F401  (used by app.py)
 from mrisk.jobs import etl
 from mrisk.jobs.gate import dq_gate, stress_entry
 from mrisk.dashboard import transforms as tf

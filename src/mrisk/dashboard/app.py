@@ -19,6 +19,11 @@ def _engine(url: str):
 cfg = load_config()
 engine = _engine(database_url(cfg))
 pid = cfg["portfolio"]["portfolio_id"]
+gaps = q.missing_columns(engine)
+if gaps:  # the dashboard is read-only and cannot add them itself
+    st.error(f"数据库由旧版本生成，缺少 {', '.join(f'{t}.{c}' for t, c in gaps)}。先运行 `uv run mrisk upgrade-db`"
+             "（加上 `--config` 指向这个库的配置）：只补这几列并补算，不重建库。")
+    st.stop()
 complete = q.complete_dates(engine, cfg)
 
 st.sidebar.title("mrisk")

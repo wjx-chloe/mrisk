@@ -3,7 +3,7 @@ from collections.abc import Iterable
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import Date, DateTime, Engine, Table, create_engine, delete, event, select
+from sqlalchemy import Date, DateTime, Engine, Table, create_engine, delete, event, inspect, select, text
 from sqlalchemy.dialects import postgresql, sqlite
 
 from mrisk.db.schema import metadata
@@ -28,8 +28,38 @@ def readonly_engine(url: str) -> Engine:
     return get_engine(url)
 
 
-def init_db(engine: Engine) -> None:
+def init_db(engine: Engine) -> list[tuple[str, str]]:
+    """Creates missing tables and adds the columns a database made by an older version lacks (upgrade_db).
+    -> the columns added."""
     metadata.create_all(engine)
+    return upgrade_db(engine)
+
+
+def missing_columns(engine: Engine) -> list[tuple[str, str]]:
+    """(table, column) of the schema that an existing table of the database lacks: what upgrade_db would add."""
+    insp = inspect(engine)
+    have = set(insp.get_table_names())
+    out = []
+    for name, table in metadata.tables.items():
+        if name in have:
+            cols = {c["name"] for c in insp.get_columns(name)}
+            out += [(name, c.name) for c in table.columns if c.name not in cols]
+    return out
+
+
+def upgrade_db(engine: Engine) -> list[tuple[str, str]]:
+    """Adds the missing columns in place (ALTER TABLE ... ADD COLUMN), so a database made by an older version is not
+    rebuilt. Only nullable, non-key columns can be added this way; the rows get NULL, which the job that owns the
+    column fills (jobs.risk.fill_es_contrib for risk_result.es_hs_contrib). -> the columns added."""
+    gaps = missing_columns(engine)
+    q = engine.dialect.identifier_preparer.quote
+    with engine.begin() as conn:
+        for name, col in gaps:
+            c = metadata.tables[name].c[col]
+            if not c.nullable or c.primary_key:
+                raise ValueError(f"{name}.{col} cannot be added to an existing table: not nullable or part of the key")
+            conn.execute(text(f"ALTER TABLE {q(name)} ADD COLUMN {q(col)} {c.type.compile(dialect=engine.dialect)}"))
+    return gaps
 
 
 def _to_records(table: Table, df: pd.DataFrame) -> list[dict]:
