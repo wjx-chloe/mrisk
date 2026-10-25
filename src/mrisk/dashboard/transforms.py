@@ -78,3 +78,29 @@ def calendar_grid(dates: pd.DatetimeIndex, hit: np.ndarray) -> pd.DataFrame:
     hit] for a week x weekday calendar."""
     d = pd.DatetimeIndex(dates)
     return pd.DataFrame({"date": d, "week": d - pd.to_timedelta(d.weekday, unit="D"), "weekday": d.weekday, "hit": np.asarray(hit, dtype=bool)})
+
+
+ATTRIBUTION_METRICS = ("var_hs", "var_param", "es_hs")
+
+
+def limit_target(rule_id: str, metric: str, scope: str, detail, largest: str | None = None) -> tuple[str, dict] | None:
+    """Where a limit rule's check is explained, from the rule's metric (not its id), so a new rule needs no new code.
+    -> (page, query params) or None for a metric no page explains. Page is a file under views/.
+    concentration_*: the exposure page with the members named by the scope, else those past the warn line (detail
+    members, largest first), else `largest` (the member the check value came from); var / es: the attribution page on
+    that metric and confidence; stress_loss:<id>: the stress page on that scenario. Every target carries from=rule_id."""
+    level, _, key = str(scope).partition(":")
+    if metric in ("concentration_instrument", "concentration_industry"):
+        if key and key != "*":
+            focus = [key]
+        else:
+            members = (detail or {}).get("members") if isinstance(detail, dict) else None
+            focus = [m["key"] for m in members] if members else ([largest] if largest else [])
+        param = "inst" if metric == "concentration_instrument" else "ind"
+        return "exposure", {"from": rule_id, **({param: ",".join(focus)} if focus else {})}
+    if metric.startswith("stress_loss:"):
+        return "stress", {"from": rule_id, "scenario": metric.split(":", 1)[1]}
+    col, _, conf = metric.rpartition("_")
+    if col in ATTRIBUTION_METRICS and conf.isdigit():
+        return "attribution", {"from": rule_id, "metric": col, "conf": f"{int(conf) / 100:g}"}
+    return None
