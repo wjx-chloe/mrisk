@@ -13,6 +13,7 @@ GATE_LABEL = {"ok": "🟢 通过", "no_dq": "🟡 窗口内有未做 DQ 的日�
 DQ_LABEL = {"pass": "🟢 通过", "fail": "🔴 失败", "skip": "⚪ 跳过"}
 BREACH_BG = "background-color: rgba(208, 59, 59, 0.18)"
 WARN_BG = "background-color: rgba(250, 178, 25, 0.18)"
+FOCUS_BG = "background-color: rgba(42, 120, 214, 0.16)"  # rows a limit link asks to highlight (not a status colour)
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,56 @@ class Ctx:
 
 def ctx() -> Ctx:
     return st.session_state["ctx"]
+
+
+def adopt_query_param(param: str, key: str, parse=str, valid=None):
+    """Puts ?param= of the URL into the widget state `key` when the URL brings a value this page has not seen yet (a
+    page_link, a pasted link, a reload), before the widget is created. A value already seen is left alone, so the
+    widget can be changed afterwards while the URL still carries the old value. Unparsable or invalid values are
+    ignored. -> the parsed value when adopted, else None."""
+    raw = st.query_params.get(param)
+    seen = st.session_state.setdefault("_qp_seen", {})
+    if raw == seen.get(param):
+        return None
+    seen[param] = raw
+    if raw is None:
+        return None
+    try:
+        v = parse(raw)
+    except (TypeError, ValueError):
+        return None
+    if valid is not None and v not in valid:
+        return None
+    st.session_state[key] = v
+    return v
+
+
+JUMP_CONTEXT = ("from", "inst", "ind")  # what a limit link adds on top of the widgets' own params
+
+
+def write_query_param(param: str, raw: str) -> None:
+    """Puts the widget's value into the URL (so the page can be reloaded or shared as it is) and marks it as seen.
+    When the user moved the widget away from the value the URL carried, the limit link's context no longer applies to
+    what is shown, so it is dropped."""
+    if st.query_params.get(param) not in (None, raw):
+        for k in JUMP_CONTEXT:
+            st.query_params.pop(k, None)
+    st.query_params[param] = raw
+    st.session_state.setdefault("_qp_seen", {})[param] = raw
+
+
+def focus_from_query(param: str) -> list[str]:
+    """Comma-separated keys of ?param= (the members a limit link asks to highlight)."""
+    raw = st.query_params.get(param)
+    return [k for k in raw.split(",") if k] if raw else []
+
+
+def jumped_from(page: str, where=None) -> None:
+    """One line on a page reached from a limit rule's link (?from=rule_id), in `where` (a placeholder at the top of
+    the page, filled after the page's widgets have written their params) or inline."""
+    rid = st.query_params.get("from")
+    if rid:
+        (where or st).info(f"从总览限额 **{rid}** 跳转到{page}。", icon="↪️")
 
 
 def wan(x: float) -> str:

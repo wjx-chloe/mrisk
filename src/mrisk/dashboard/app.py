@@ -1,11 +1,12 @@
 """mrisk dashboard entry: `uv run streamlit run src/mrisk/dashboard/app.py`.
 Reads the database named in the config (MRISK_CONFIG, default config.yaml) read-only; never writes."""
 
+import pandas as pd
 import streamlit as st
 
 from mrisk.config import database_url, load_config
 from mrisk.dashboard import queries as q
-from mrisk.dashboard.common import Ctx, conf_label
+from mrisk.dashboard.common import Ctx, adopt_query_param, conf_label, write_query_param
 
 st.set_page_config(page_title="mrisk 风险看板", page_icon="📉", layout="wide")
 
@@ -27,9 +28,19 @@ if complete.empty:
     st.stop()
 
 options = list(complete[::-1])
-date = st.sidebar.selectbox("日期", options, index=0, format_func=lambda d: d.strftime("%Y-%m-%d"), key="date",
+confs = sorted(cfg["confidence"], reverse=True)
+# ?date= / ?conf= in the URL (a limit link from the overview, a pasted link) set the sidebar; the sidebar writes back
+adopt_query_param("date", "date", pd.Timestamp, options)
+adopt_query_param("conf", "conf", float, confs)
+if st.session_state.get("date") not in options:
+    st.session_state["date"] = options[0]
+if st.session_state.get("conf") not in confs:
+    st.session_state["conf"] = confs[0]
+date = st.sidebar.selectbox("日期", options, format_func=lambda d: d.strftime("%Y-%m-%d"), key="date",
                             help="只列出有完整风险结果的持仓日：组合层 VaR 在每个置信度上都有，且每条 active 限额都有检查行")
-conf = st.sidebar.radio("置信度", sorted(cfg["confidence"], reverse=True), format_func=conf_label, key="conf")
+conf = st.sidebar.radio("置信度", confs, format_func=conf_label, key="conf")
+write_query_param("date", f"{date:%Y-%m-%d}")
+write_query_param("conf", f"{conf:g}")
 
 note = q.banner(engine, cfg, complete)
 if note:

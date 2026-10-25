@@ -4,6 +4,7 @@ read; Plotly data it cannot, so figures are checked in the charts tests)."""
 
 import datetime as dt
 import shutil
+from urllib.parse import parse_qs
 from pathlib import Path
 
 import numpy as np
@@ -371,6 +372,76 @@ def test_overview_metrics_and_limit_lights_match_the_database(world):
     status = at.markdown[0].value
     assert status.startswith("**数据状态**") and f"行情截至 {d:%Y-%m-%d}" in status and "来源 akshare 实时拉数" in status
     assert "门禁 🟢 通过" in status and "🟢 无失败" in status
+
+
+def _app_at(page: str, **params) -> AppTest:
+    """The app opened on a page with a URL query string, as a page_link or a pasted link opens it."""
+    at = AppTest.from_file(str(APP), default_timeout=120)
+    for k, v in params.items():
+        at.query_params[k] = v
+    at.switch_page(f"views/{page}.py")
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    return at
+
+
+def test_overview_links_every_limit_to_its_page_with_context(world):
+    engine, cfg = world
+    d = q.complete_dates(engine, cfg)[-1]
+    at = _app()
+    lim = q.limits_today(engine, _pid(cfg), d)
+    _, inst = q.exposure(engine, _pid(cfg), d, 0.99)
+    links = {x.proto.label.split("（")[0]: x.proto for x in at.get("page_link")}
+    assert set(links) == set(lim["rule_id"])
+    for r in lim.itertuples():
+        page, params = tf.limit_target(r.rule_id, r.metric, r.scope, r.detail, inst["instrument_id"].iloc[0])
+        got = {k: v[0] for k, v in parse_qs(links[r.rule_id].query_string).items()}
+        assert links[r.rule_id].page == page
+        assert got == {"date": f"{d:%Y-%m-%d}", "conf": "0.99", **params}
+    # the fake world's six ~1e7 names are all past the single-name warn line
+    members = lim.set_index("rule_id").at["L_CONC_INST", "detail"]["members"]
+    assert parse_qs(links["L_CONC_INST"].query_string)["inst"] == [",".join(m["key"] for m in members)]
+    assert links["L_VAR99"].page == "attribution" and links["L_STRESS_B"].page == "stress"
+
+
+def test_limit_links_land_with_their_context(world):
+    engine, cfg = world
+    complete = q.complete_dates(engine, cfg)
+    d = complete[-2]  # not the default date: the link's date wins
+    _, inst = q.exposure(engine, _pid(cfg), d, 0.95)
+    name = inst["instrument_id"].iloc[3]
+    at = _app_at("exposure", date=f"{d:%Y-%m-%d}", conf="0.95", **{"from": "L_CONC_INST", "inst": name})
+    assert at.sidebar.selectbox(key="date").value == d and at.sidebar.radio(key="conf").value == 0.95
+    assert "L_CONC_INST" in at.info[0].value
+    assert any(c.value.startswith("高亮个股：") and name in c.value for c in at.caption)
+    at = _app_at("attribution", date=f"{d:%Y-%m-%d}", conf="0.99", **{"from": "L_ES99", "metric": "es_hs"})
+    assert at.radio(key="attr_metric").value == "es_hs" and at.sidebar.radio(key="conf").value == 0.99
+    assert "L_ES99" in at.info[0].value
+    least = q.stress(engine, _pid(cfg), d)["scenario_id"].iloc[-1]  # not the drill-down's default (the worst)
+    at = _app_at("stress", date=f"{d:%Y-%m-%d}", conf="0.99", **{"from": "L_STRESS_B", "scenario": least})
+    assert at.selectbox(key="stress_scenario").value == least and "L_STRESS_B" in at.info[0].value
+
+
+def test_moving_a_widget_after_a_jump_sticks_and_drops_the_jump_context(world):
+    engine, cfg = world
+    complete = q.complete_dates(engine, cfg)
+    at = _app_at("attribution", date=f"{complete[-1]:%Y-%m-%d}", conf="0.99", **{"from": "L_ES99", "metric": "es_hs"})
+    at.radio(key="attr_metric").set_value("var_hs").run()  # the URL still says es_hs when this rerun starts
+    assert at.radio(key="attr_metric").value == "var_hs" and not at.info
+    assert at.query_params["metric"] == "var_hs" and "from" not in at.query_params
+    at = _app_at("exposure", date=f"{complete[-1]:%Y-%m-%d}", conf="0.99", **{"from": "L_CONC_IND", "ind": "银行"})
+    at.sidebar.selectbox(key="date").set_value(complete[-2]).run()
+    assert at.sidebar.selectbox(key="date").value == complete[-2]
+    assert not at.info and "ind" not in at.query_params and at.query_params["date"] == f"{complete[-2]:%Y-%m-%d}"
+
+
+def test_unusable_query_params_fall_back_to_the_defaults(world):
+    engine, cfg = world
+    at = _app_at("overview", date="1999-01-01", conf="0.5")
+    assert at.sidebar.selectbox(key="date").value == q.complete_dates(engine, cfg)[-1]
+    assert at.sidebar.radio(key="conf").value == 0.99
+    at = _app_at("attribution", date="not-a-date", metric="nope")
+    assert at.radio(key="attr_metric").value == "var_hs"
 
 
 def test_confidence_switch_changes_the_numbers(world):
