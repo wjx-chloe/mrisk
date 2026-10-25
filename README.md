@@ -29,6 +29,7 @@ uv run mrisk --config config.demo.yaml dashboard    # 打开看板
 - `fetch-snapshot` 从本仓库的 GitHub Release 下载 `mrisk-snapshot-20260918.zip`，按 `config.demo.yaml` 里记录的 sha256 校验，再逐个文件核对清单后解压到 `data/snapshot/`。
 - `demo` 依次执行回灌（日历、证券、行情、mock 持仓、12 条 DQ 规则）→ VaR / ES → 假设损益 → 回测 → 归因 → 压测 → 限额，覆盖全部 497 个持仓日。本机实测约 3 分钟，其中压测约 100 秒。再跑一次要加 `--overwrite`。
 - 离线跑出来的库与作者本机用实时数据建的库**逐表逐行、逐位相同**（`uv run mrisk diff-db data/mrisk.db data/demo.db`，只排除 `run_id` 等运行元数据），所以 docs 里的数字都能在 demo 库上复现。
+- 之前版本建的库（例如更新代码前跑过的 `data/demo.db`）缺少新加的列时，看板会提示先运行 `uv run mrisk upgrade-db`（加 `--config` 指向那个库的配置）：就地补列、只补算新列，不用重建库。
 
 ### 看板只允许本机访问
 
