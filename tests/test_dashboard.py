@@ -227,6 +227,23 @@ def test_banner_when_the_latest_day_is_blocked_by_dq(world):
     assert note["level"] == "error" and "DQ 门禁阻断" in note["text"] and "DQ03" in note["text"]
 
 
+def test_data_status_reads_dates_from_the_database_and_source_from_the_config(world):
+    engine, cfg = world
+    pid = _pid(cfg)
+    last = q.position_dates(engine, pid)[-1]
+    ds = q.data_status(engine, cfg, last)
+    assert ds["price_end"] == read_frame(engine, s.daily_price, columns=["trade_date"])["trade_date"].max()
+    assert ds["position_end"] == last
+    assert ds["source"] == "akshare 实时拉数"  # the fake world's config
+    assert ds["gate"] == "ok" and ds["dq_fail"] == 0 and ds["dq_run"] > 0
+    snap = {**cfg, "data": {**cfg["data"], "source": "snapshot"}, "snapshot_release": {"tag": "snapshot-20990101"}}
+    assert q.data_status(engine, snap, last)["source"] == "离线快照 snapshot-20990101"
+    _dq_fail(engine, last)  # a blocking price rule fails on the day
+    ds = q.data_status(engine, cfg, last)
+    assert ds["gate"] == "blocked" and "DQ03" in ds["gate_reason"]
+    assert ds["dq_fail"] == 1 and ds["dq_fail_blocking"] == 1
+
+
 def test_limit_runs_count_consecutive_days_and_no_data_breaks(world):
     engine, cfg = world
     pid = _pid(cfg)
@@ -330,6 +347,9 @@ def test_overview_metrics_and_limit_lights_match_the_database(world):
     assert set(lights.index) == set(lc.index)
     for rid in lc.index:
         assert lights.at[rid, "状态"] == LIMIT_LABEL[lc.at[rid, "status"]]
+    status = at.markdown[0].value
+    assert status.startswith("**数据状态**") and f"行情截至 {d:%Y-%m-%d}" in status and "来源 akshare 实时拉数" in status
+    assert "门禁 🟢 通过" in status and "🟢 无失败" in status
 
 
 def test_confidence_switch_changes_the_numbers(world):
