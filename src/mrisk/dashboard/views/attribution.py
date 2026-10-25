@@ -3,14 +3,18 @@ import streamlit as st
 
 from mrisk.dashboard import charts
 from mrisk.dashboard import queries as q
-from mrisk.dashboard.common import conf_label, ctx, wan
+from mrisk.dashboard.common import adopt_query_param, conf_label, ctx, jumped_from, wan, write_query_param
 
 c = ctx()
 st.header(f"归因 · {c.date:%Y-%m-%d}")
 
 METRICS = {"var_hs": "VaR 历史模拟", "var_param": "VaR 参数法", "es_hs": "ES 历史模拟"}
 EFFECTS = {"quantity": "持仓数量", "revaluation_scale": "重估：规模", "revaluation_drift": "重估：权重漂移", "window": "窗口滚动"}
+banner = st.empty()
+adopt_query_param("metric", "attr_metric", str, METRICS)  # a limit link names its metric
 metric = st.radio("指标", list(METRICS), format_func=METRICS.get, horizontal=True, key="attr_metric")
+write_query_param("metric", metric)
+jumped_from("归因页", banner)
 
 port, inst = q.attribution(c.engine, c.pid, c.date, c.conf, metric)
 if port.empty:
