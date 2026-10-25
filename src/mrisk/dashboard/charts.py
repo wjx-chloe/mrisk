@@ -10,6 +10,7 @@ SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a
 STATUS = {"good": "#0ca30c", "warning": "#fab219", "serious": "#ec835a", "critical": "#d03b3b"}
 MUTED = "#898781"
 NEUTRAL = "#c3c2b7"
+FADED = 0.3  # opacity of the bars outside a highlight
 ZONE_COLOR = {"green": STATUS["good"], "yellow": STATUS["warning"], "red": STATUS["critical"]}
 
 
@@ -34,11 +35,20 @@ def lines(df: pd.DataFrame, labels: dict[str, str], title: str, y_title: str = "
     return _layout(fig, title, y_title, y_fmt)
 
 
-def hbar(labels, values, title: str, x_fmt: str = ".1%", color: str = SERIES[0], text_fmt: str | None = None) -> go.Figure:
-    """Horizontal bars, first item on top. Negative values extend left of the axis."""
+def _emphasis(labels: list, highlight) -> float | list[float]:
+    """Marker opacity: everything full, or with a highlight the highlighted labels full and the rest faded."""
+    if not highlight:
+        return 1.0
+    return [1.0 if x in set(highlight) else FADED for x in labels]
+
+
+def hbar(labels, values, title: str, x_fmt: str = ".1%", color: str = SERIES[0], text_fmt: str | None = None,
+         highlight=None) -> go.Figure:
+    """Horizontal bars, first item on top. Negative values extend left of the axis. highlight: labels kept at full
+    strength while the other bars fade (a limit link's focus)."""
     labels, values = list(labels), np.asarray(values, dtype=float)
     fig = go.Figure(go.Bar(
-        y=labels, x=values, orientation="h", marker={"color": color, "cornerradius": 4},
+        y=labels, x=values, orientation="h", marker={"color": color, "cornerradius": 4, "opacity": _emphasis(labels, highlight)},
         texttemplate="%{x:" + (text_fmt or x_fmt) + "}", textposition="outside", cliponaxis=False,
         hovertemplate="%{y}: %{x:" + x_fmt + "}<extra></extra>",
     ))

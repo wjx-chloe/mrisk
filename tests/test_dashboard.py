@@ -87,6 +87,25 @@ def test_calendar_grid():
     assert g["hit"].tolist() == [False, True, False]
 
 
+def test_limit_target_follows_the_metric_not_the_rule_id():
+    det = {"members": [{"key": "SZ002475", "value": 0.0966}, {"key": "SH600584", "value": 0.085}]}
+    # members past the warn line, largest first; the largest member only when nobody is past it
+    assert tf.limit_target("L_CONC_INST", "concentration_instrument", "instrument:*", det, "SH000001") == (
+        "exposure", {"from": "L_CONC_INST", "inst": "SZ002475,SH600584"})
+    assert tf.limit_target("L_CONC_IND", "concentration_industry", "industry:*", {"members": []}, "电子") == (
+        "exposure", {"from": "L_CONC_IND", "ind": "电子"})
+    assert tf.limit_target("X", "concentration_industry", "industry:*", None, None) == ("exposure", {"from": "X"})
+    # a rule on one named member points at that member
+    assert tf.limit_target("X", "concentration_instrument", "instrument:SH600000", det, "SZ002475")[1]["inst"] == "SH600000"
+    # VaR / ES: the metric and confidence come from the metric name
+    assert tf.limit_target("L_VAR99", "var_hs_99", "portfolio", None) == ("attribution", {"from": "L_VAR99", "metric": "var_hs", "conf": "0.99"})
+    assert tf.limit_target("L_ES95", "es_hs_95", "portfolio", None) == ("attribution", {"from": "L_ES95", "metric": "es_hs", "conf": "0.95"})
+    assert tf.limit_target("L_STRESS_2015", "stress_loss:HIST_2015", "portfolio", None) == (
+        "stress", {"from": "L_STRESS_2015", "scenario": "HIST_2015"})
+    assert tf.limit_target("X", "turnover_99", "portfolio", None) is None
+    assert tf.limit_target("X", "var_hs_x", "portfolio", None) is None
+
+
 # ---- charts ----------------------------------------------------------------------------------------------------
 
 def test_backtest_chart_marks_exactly_the_exceptions():
@@ -124,6 +143,8 @@ def test_hbar_and_exception_calendar_and_limit_history():
     assert list(fig.data[0].y) == ["电子", "银行"] and list(fig.data[0].x) == [0.23, -0.01]
     lo, hi = fig.layout.xaxis.range
     assert lo < -0.01 and hi > 0.23  # padded for the outside labels
+    assert fig.data[0].marker.opacity == 1.0
+    assert list(charts.hbar(["电子", "银行"], [0.23, 0.1], "t", highlight=["银行"]).data[0].marker.opacity) == [charts.FADED, 1.0]
     g = tf.calendar_grid(pd.DatetimeIndex(["2025-06-05", "2025-06-06"]), [False, True])
     z = np.array(charts.exception_calendar(g, "t").data[0].z)
     assert z[3, 0] == 0.0 and z[4, 0] == 1.0 and np.isnan(z[0, 0])
