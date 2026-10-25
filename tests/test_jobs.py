@@ -1,13 +1,17 @@
 import datetime as dt
 import json
+import shutil
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
-from sqlalchemy import delete
+import yaml
+from sqlalchemy import delete, update
 
+from mrisk import cli
 from mrisk.db import schema as s
-from mrisk.db.repo import read_frame, upsert
+from mrisk.db.repo import init_db, missing_columns, read_frame, upsert
 from mrisk.jobs import daily as jobs
 from mrisk.jobs import etl
 from mrisk.jobs import gate
@@ -152,6 +156,67 @@ def test_risk_job_writes_all_levels_and_bj_series_is_continuous_across_920_switc
         assert g.loc[g["level"] == "portfolio", "es_hs_contrib"].iloc[0] == es
         for level in ("industry", "instrument"):
             assert g.loc[g["level"] == level, "es_hs_contrib"].sum() == pytest.approx(es, rel=1e-12)
+
+
+def _make_old(engine) -> None:
+    """What a database made before risk_result.es_hs_contrib existed looks like."""
+    with engine.begin() as conn:
+        conn.exec_driver_sql("ALTER TABLE risk_result DROP COLUMN es_hs_contrib")
+
+
+def _risk_rows(engine) -> pd.DataFrame:
+    return read_frame(engine, s.risk_result).sort_values(["trade_date", "level", "level_key", "confidence"], ignore_index=True)
+
+
+def test_old_database_is_upgraded_in_place_and_only_the_new_column_is_computed(risk_env):
+    engine, cfg = risk_env
+    risk_job.run_risk(engine, cfg, "2025-05-14", RISK_DATE, run_id="r1")
+    expected = _risk_rows(engine)
+    _make_old(engine)
+    assert missing_columns(engine) == [("risk_result", "es_hs_contrib")]
+    assert init_db(engine) == [("risk_result", "es_hs_contrib")]  # ALTER TABLE, the rows stay
+    assert missing_columns(engine) == [] and init_db(engine) == []
+    assert _risk_rows(engine)["es_hs_contrib"].isna().all()
+    status = risk_job.fill_es_contrib(engine, cfg)
+    assert status.index.equals(pd.DatetimeIndex(sorted(expected["trade_date"].unique()))) and set(status) == {"filled"}
+    # bit for bit what a fresh run writes, every other column and the run_id untouched
+    pd.testing.assert_frame_equal(_risk_rows(engine), expected, check_exact=True)
+    assert risk_job.fill_es_contrib(engine, cfg).empty  # nothing left to fill
+
+
+def test_fill_refuses_a_date_whose_stored_risk_no_longer_matches(risk_env, caplog):
+    engine, cfg = risk_env
+    risk_job.run_risk(engine, cfg, "2025-05-14", RISK_DATE, run_id="r1")
+    _make_old(engine)
+    init_db(engine)
+    rr = s.risk_result.c
+    with engine.begin() as conn:  # the stored ES of one date is not what the code computes from the stored inputs
+        conn.execute(update(s.risk_result).where(rr.trade_date == RISK_DATE.date(), rr.level == "portfolio").values(es_hs=rr.es_hs * (1 + 1e-12)))
+    status = risk_job.fill_es_contrib(engine, cfg)
+    assert status[RISK_DATE] == "mismatch" and (status.drop(RISK_DATE) == "filled").all()
+    after = _risk_rows(engine)
+    assert after.loc[after["trade_date"] == RISK_DATE, "es_hs_contrib"].isna().all()
+    assert after.loc[after["trade_date"] != RISK_DATE, "es_hs_contrib"].notna().all()
+    assert "not filled" in caplog.text
+    risk_job.run_risk(engine, cfg, RISK_DATE, run_id="r2")  # recomputing the date is the way out
+    assert _risk_rows(engine)["es_hs_contrib"].notna().all() and risk_job.fill_es_contrib(engine, cfg).empty
+
+
+def test_upgrade_db_command_and_diff_db_on_an_old_database(risk_env, tmp_path, capsys):
+    engine, cfg = risk_env
+    risk_job.run_risk(engine, cfg, "2025-05-14", RISK_DATE, run_id="r1")
+    db = Path(engine.url.database)
+    fresh = tmp_path / "fresh.db"
+    shutil.copy(db, fresh)
+    _make_old(engine)
+    engine.dispose()
+    path = tmp_path / "old.yaml"
+    path.write_text(yaml.safe_dump({**{k: v for k, v in cfg.items() if not k.startswith("_")},
+                                    "database": {"url": f"sqlite:///{db.as_posix()}"}}, allow_unicode=True), encoding="utf-8")
+    assert cli.main(["diff-db", str(db), str(fresh)]) == 2  # refuses, and says to upgrade first
+    assert cli.main(["--config", str(path), "upgrade-db"]) == 0
+    assert "filled on 5 date(s), 0 date(s) not filled" in capsys.readouterr().out
+    assert cli.main(["diff-db", str(db), str(fresh)]) == 0  # identical to a database computed with the column
 
 
 def test_risk_job_rerun_replaces_the_date(risk_env):

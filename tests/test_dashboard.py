@@ -492,6 +492,16 @@ def test_stress_page_ranks_with_mode_and_hides_proxied_names(world):
     assert (names.loc[~proxied, "损失占组合市值"] != "—").all()
 
 
+def test_database_from_an_older_version_says_how_to_upgrade(world):
+    engine, cfg = world
+    with engine.begin() as conn:
+        conn.exec_driver_sql("ALTER TABLE risk_result DROP COLUMN es_hs_contrib")
+    at = AppTest.from_file(str(APP), default_timeout=120)
+    at.run()
+    assert not at.exception
+    assert "risk_result.es_hs_contrib" in at.error[0].value and "mrisk upgrade-db" in at.error[0].value
+
+
 def test_blocked_latest_day_puts_a_banner_on_every_page(world):
     engine, cfg = world
     last = q.position_dates(engine, _pid(cfg))[-1]

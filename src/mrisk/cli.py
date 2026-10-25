@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from mrisk.config import database_url, load_config, resolve_path
-from mrisk.db.repo import get_engine, init_db, readonly_engine
+from mrisk.db.repo import get_engine, init_db, missing_columns, readonly_engine
 from mrisk.jobs import daily as jobs
 from mrisk.jobs import etl, gate
 from mrisk.jobs import attribution as attribution_job
@@ -69,6 +69,11 @@ def main(argv: list[str] | None = None) -> int:
     v = sub.add_parser("dashboard", help="start the Streamlit dashboard on the config's database, reachable from this machine only")
     v.add_argument("--address", default="localhost", help="server address (default localhost; 0.0.0.0 opens it to the LAN)")
     v.add_argument("--port", type=int)
+    sub.add_parser(
+        "upgrade-db",
+        help="bring a database made by an older version up to the current schema in place: add missing columns and "
+             "compute only them (every other command that writes does this too); exit 2 if a date could not be filled",
+    )
     c = sub.add_parser("diff-db", help="compare two databases row by row, run metadata left out (exit 2 when they differ)")
     c.add_argument("a")
     c.add_argument("b")
@@ -90,7 +95,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "dashboard":
         return _dashboard(cfg, args.address, args.port)
     engine = get_engine(database_url(cfg))
-    init_db(engine)
+    added = init_db(engine)
+    filled = _fill_new_columns(engine, cfg, added)
+    if args.cmd == "upgrade-db":
+        return 2 if (filled == "mismatch").any() else 0
 
     if args.cmd == "build-universe":
         uni = etl.build_universe_seed(cfg, etl.make_source(cfg))
@@ -118,6 +126,19 @@ def main(argv: list[str] | None = None) -> int:
         run_forever(engine, cfg)
         return 0
     return 1
+
+
+def _fill_new_columns(engine, cfg, added: list[tuple[str, str]]) -> pd.Series:
+    """Computes the values of columns an older database lacked (init_db has added them as NULL): only those columns,
+    nothing else is recomputed. -> per-date status of the fill."""
+    for name, col in added:
+        logging.info("schema upgrade: added column %s.%s", name, col)
+    status = risk_job.fill_es_contrib(engine, cfg)
+    if len(status):
+        counts = status.value_counts().to_dict()
+        print(f"risk_result.es_hs_contrib filled on {counts.get('filled', 0)} date(s), "
+              f"{counts.get('mismatch', 0)} date(s) not filled (stored risk differs from a recomputation, see the log)")
+    return status
 
 
 def _export_snapshot(cfg, out: Path) -> int:
@@ -201,6 +222,13 @@ def _diff_db(a: str, b: str) -> int:
             logging.error("%s does not exist", p)
             return 2
     ea, eb = (readonly_engine(f"sqlite:///{Path(p).resolve().as_posix()}") for p in (a, b))
+    gaps = {p: missing_columns(e) for p, e in ((a, ea), (b, eb))}
+    for p, cols in gaps.items():
+        if cols:
+            logging.error("%s lacks %s: made by an older version; run mrisk upgrade-db on it first (adds and fills only these)",
+                          p, ", ".join(f"{t}.{c}" for t, c in cols))
+    if any(gaps.values()):
+        return 2
     report = compare_databases(ea, eb)
     with pd.option_context("display.width", 200, "display.max_columns", 20):
         print(report.to_string(index=False))
