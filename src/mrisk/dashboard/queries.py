@@ -74,6 +74,38 @@ def banner(engine: Engine, cfg, complete: pd.DatetimeIndex) -> dict | None:
     return {"level": "warning", "text": f"最新交易日 {latest.date()} 的风险结果或限额检查不完整（任务可能尚未跑完或单独失败）。默认显示 {shown}。"}
 
 
+SOURCE_LABEL = {"snapshot": "离线快照", "akshare": "akshare 实时拉数"}
+
+
+def data_status(engine: Engine, cfg, d) -> dict:
+    """The data behind the page for d: latest price and position dates in the database, the source the config names
+    (the database does not record where its prices came from), the DQ gate of d's VaR / ES and d's DQ results.
+    -> {price_end, position_end, source, gate, gate_reason, dq_fail, dq_fail_blocking, dq_run}."""
+    d = pd.Timestamp(d)
+    pid = cfg["portfolio"]["portfolio_id"]
+    dp, ps = s.daily_price.c, s.position.c
+    with engine.connect() as conn:
+        price_end = conn.execute(select(func.max(dp.trade_date))).scalar()
+        position_end = conn.execute(select(func.max(ps.trade_date)).where(ps.portfolio_id == pid)).scalar()
+    src = cfg["data"]["source"]
+    source = SOURCE_LABEL.get(src, src)
+    if src == "snapshot" and cfg.get("snapshot_release"):
+        source += f" {cfg['snapshot_release']['tag']}"
+    gate, reason = _gate(engine, cfg, d, "risk_result")
+    dq = dq_today(engine, d)
+    fail = dq["status"] == "fail"
+    return {
+        "price_end": pd.Timestamp(price_end) if price_end else None,
+        "position_end": pd.Timestamp(position_end) if position_end else None,
+        "source": source,
+        "gate": gate,
+        "gate_reason": reason,
+        "dq_fail": int(fail.sum()),
+        "dq_fail_blocking": int((fail & (dq["severity"] == "blocking")).sum()),
+        "dq_run": int(dq["status"].notna().sum()),
+    }
+
+
 def names(engine: Engine) -> pd.DataFrame:
     return read_frame(engine, s.instrument, date_col="list_date", columns=["instrument_id", "name", "industry_l1"]).set_index("instrument_id")
 

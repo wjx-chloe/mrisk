@@ -2,10 +2,26 @@ import pandas as pd
 import streamlit as st
 
 from mrisk.dashboard import queries as q
-from mrisk.dashboard.common import LIMIT_LABEL, conf_label, ctx, pct, status_dataframe, wan
+from mrisk.dashboard.common import GATE_LABEL, LIMIT_LABEL, conf_label, ctx, pct, status_dataframe, wan
 
 c = ctx()
 st.header(f"总览 · {c.date:%Y-%m-%d}")
+
+
+def _day(t) -> str:
+    return "—" if t is None else f"{t:%Y-%m-%d}"
+
+
+ds = q.data_status(c.engine, c.cfg, c.date)
+dq_text = f"🔴 {ds['dq_fail']} 条失败（blocking {ds['dq_fail_blocking']}）" if ds["dq_fail"] else "🟢 无失败"
+st.markdown(
+    f"**数据状态** · 行情截至 {_day(ds['price_end'])} · 持仓截至 {_day(ds['position_end'])} · 来源 {ds['source']} · "
+    f"门禁 {GATE_LABEL[ds['gate']]} · DQ {ds['dq_run']} 条 {dq_text}",
+    help="日期取自库里的行情表和持仓表；来源取自配置的 data.source（库本身不记录行情来源）；门禁是所选日期 VaR / ES "
+         "依赖的行情和持仓上 blocking 规则的判断；DQ 是所选日期各规则最近一次运行的结果。明细见「数据质量」页。",
+)
+if ds["gate"] != "ok":
+    st.caption(f"门禁原因：{ds['gate_reason']}")
 
 ov = q.overview(c.engine, c.pid, c.date, c.conf, c.complete)
 today = ov.loc["today"]
