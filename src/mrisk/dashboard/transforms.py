@@ -104,3 +104,12 @@ def limit_target(rule_id: str, metric: str, scope: str, detail, largest: str | N
     if col in ATTRIBUTION_METRICS and conf.isdigit():
         return "attribution", {"from": rule_id, "metric": col, "conf": f"{int(conf) / 100:g}"}
     return None
+
+
+def tail_days(confidence: float, n_obs: int) -> int:
+    """Days in the tail historical-simulation ES averages over (P&L strictly below the linear-interpolated quantile),
+    when no two P&Ls tie: the quantile sits at position h = (1 - c)(T - 1) of the sorted P&L, so the days at positions
+    0 .. ceil(h) - 1 lie below it (h a whole number: the quantile is that day's P&L, which is not below itself; in
+    floating point a whole h can land a hair either side, so this is the size to quote, not to rely on).
+    T = 250: h = 2.49 -> 3 days at 99%, h = 12.45 -> 13 at 95%."""
+    return int(np.ceil((1.0 - confidence) * (n_obs - 1)))

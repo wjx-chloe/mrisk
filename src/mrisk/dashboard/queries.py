@@ -164,19 +164,24 @@ def limit_episodes(engine: Engine, pid: str, d, status: str = "breach") -> pd.Da
 
 
 def exposure(engine: Engine, pid: str, d, conf: float) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """(industries [industry, market_value, weight], names [instrument_id, name, industry, market_value, weight]),
-    largest first, from the risk_result rows of d."""
+    """(industries [industry, market_value, weight, es_contrib, es_share], names [instrument_id, name, industry,
+    market_value, weight, es_contrib, es_share]), largest market value first, from the risk_result rows of d.
+    es_contrib is the stored Euler contribution to the portfolio ES at conf, es_share = es_contrib / portfolio ES
+    (each level sums to 1); NaN where the database has not filled the column (mrisk upgrade-db)."""
     rr = read_frame(engine, s.risk_result, d, d, portfolio_id=pid)
     rr = rr[np.isclose(rr["confidence"], conf)]
-    total = rr.loc[rr["level"] == "portfolio", "market_value"].iloc[0]
-    ind = rr[rr["level"] == "industry"][["level_key", "market_value"]].rename(columns={"level_key": "industry"})
-    inst = rr[rr["level"] == "instrument"][["level_key", "market_value"]].rename(columns={"level_key": "instrument_id"})
+    port = rr[rr["level"] == "portfolio"].iloc[0]
+    cols = {"market_value": "market_value", "es_hs_contrib": "es_contrib"}
+    ind = rr[rr["level"] == "industry"][["level_key", *cols]].rename(columns={"level_key": "industry", **cols})
+    inst = rr[rr["level"] == "instrument"][["level_key", *cols]].rename(columns={"level_key": "instrument_id", **cols})
     inst = inst.join(names(engine), on="instrument_id").rename(columns={"industry_l1": "industry"})
     for f in (ind, inst):
-        f["weight"] = f["market_value"] / total
+        f["weight"] = f["market_value"] / port["market_value"]
+        f["es_share"] = f["es_contrib"] / port["es_hs"]
+    keep = ["market_value", "weight", "es_contrib", "es_share"]
     return (
-        ind.sort_values("market_value", ascending=False).reset_index(drop=True),
-        inst.sort_values("market_value", ascending=False).reset_index(drop=True)[["instrument_id", "name", "industry", "market_value", "weight"]],
+        ind.sort_values("market_value", ascending=False).reset_index(drop=True)[["industry", *keep]],
+        inst.sort_values("market_value", ascending=False).reset_index(drop=True)[["instrument_id", "name", "industry", *keep]],
     )
 
 
