@@ -179,8 +179,8 @@ def test_es_components_sum_to_es_and_scale_with_the_positions():
 
 
 def test_tail_days_at_250():
-    # the tail of linear-interpolated HS ES has floor((1 - c)(T - 1)) + 1 days when no P&L ties:
-    # T = 250 -> 99%: floor(2.49) + 1 = 3, 95%: floor(12.45) + 1 = 13
+    # the tail of linear-interpolated HS ES has ceil((1 - c)(T - 1)) days when no P&L ties:
+    # T = 250 -> 99%: ceil(2.49) = 3, 95%: ceil(12.45) = 13
     port = np.random.default_rng(3).standard_normal(250)[:, None]
     var = hs_var(port, [0.99, 0.95])
     assert hs_es(port, var)[1][:, 0].tolist() == [3, 13]

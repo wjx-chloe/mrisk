@@ -107,7 +107,23 @@ def test_limit_target_follows_the_metric_not_the_rule_id():
     assert tf.limit_target("X", "var_hs_x", "portfolio", None) is None
 
 
+def test_tail_days_hand_computed():
+    # position h = (1 - c)(T - 1) of the sorted P&L; the days below it are positions 0 .. ceil(h) - 1
+    assert tf.tail_days(0.99, 250) == 3 and tf.tail_days(0.95, 250) == 13  # h = 2.49, 12.45
+    assert tf.tail_days(0.8, 10) == 2 and tf.tail_days(0.99, 5) == 1  # h = 1.8, 0.04
+
+
 # ---- charts ----------------------------------------------------------------------------------------------------
+
+def test_hbar_pair_two_measures_on_one_axis():
+    fig = charts.hbar_pair(["电子", "银行"], [0.23, 0.10], [0.31, -0.02], ("市值占比", "ES 贡献占比"), "t", highlight=["银行"])
+    a, b = fig.data
+    assert (a.name, b.name) == ("市值占比", "ES 贡献占比") and list(b.x) == [0.31, -0.02]
+    assert (a.marker.color, b.marker.color) == tuple(charts.SERIES[:2])
+    assert list(a.marker.opacity) == list(b.marker.opacity) == [charts.FADED, 1.0]
+    lo, hi = fig.layout.xaxis.range
+    assert lo < -0.02 and hi > 0.31 and fig.layout.barmode == "group"
+
 
 def test_backtest_chart_marks_exactly_the_exceptions():
     obs = pd.DataFrame({
@@ -301,6 +317,17 @@ def test_exposure_and_overview_agree_with_stored_risk(world):
     assert set(ov.index) == {"today", "prev"}
 
 
+def test_exposure_carries_the_stored_es_contributions(world):
+    engine, cfg = world
+    pid, d = _pid(cfg), q.complete_dates(engine, cfg)[-1]
+    rr = read_frame(engine, s.risk_result, d, d)
+    for conf in (0.95, 0.99):
+        ind, inst = q.exposure(engine, pid, d, conf)
+        stored = rr[rr["confidence"] == conf].set_index("level_key")["es_hs_contrib"]
+        assert inst.set_index("instrument_id")["es_contrib"].to_dict() == stored.loc[inst["instrument_id"]].to_dict()
+        assert ind["es_share"].sum() == pytest.approx(1.0, rel=1e-12) and inst["es_share"].sum() == pytest.approx(1.0, rel=1e-12)
+
+
 def test_backtest_query_zone_follows_the_binomial_rule_at_95(world):
     engine, cfg = world
     d = q.complete_dates(engine, cfg)[-1]
@@ -490,6 +517,32 @@ def test_stress_page_ranks_with_mode_and_hides_proxied_names(world):
     assert names.loc[proxied, "代码"].tolist() == [name]
     assert (names.loc[proxied, "损失占组合市值"] == "—").all() and (names.loc[proxied, "个股情景收益"] == "—").all()
     assert (names.loc[~proxied, "损失占组合市值"] != "—").all()
+
+
+def test_exposure_page_shows_es_contribution_beside_the_weight_and_warns_at_99(world):
+    engine, cfg = world
+    d = q.complete_dates(engine, cfg)[-1]
+    T = cfg["lookback_days"]
+    at = _app("exposure", 0.99)
+    assert f"尾部仅约 {tf.tail_days(0.99, T)} 个场景，贡献随单日剧烈变化，建议以 95%（尾部约 {tf.tail_days(0.95, T)} 天）为准" in at.warning[0].value
+    top = at.dataframe[0].value.set_index("代码")
+    _, inst = q.exposure(engine, _pid(cfg), d, 0.99)
+    for r in inst.head(10).itertuples():
+        assert top.at[r.instrument_id, "市值占比"] == f"{r.weight * 100:.2f}%"
+        assert top.at[r.instrument_id, "ES 贡献"] == wan(r.es_contrib) and top.at[r.instrument_id, "ES 贡献占比"] == f"{r.es_share * 100:.2f}%"
+    at = _app("exposure", 0.95)
+    assert not at.warning  # 95% is the widest tail: nothing to warn about, and the page stays on 95% (no switch)
+    assert at.sidebar.radio(key="conf").value == 0.95
+
+
+def test_exposure_page_without_contributions_for_the_day(world):
+    engine, cfg = world
+    d = q.complete_dates(engine, cfg)[-1]
+    with engine.begin() as conn:  # a date the upgrade could not fill
+        conn.execute(update(s.risk_result).where(s.risk_result.c.trade_date == d.date()).values(es_hs_contrib=None))
+    at = _app("exposure", 0.95)
+    assert "没有 ES 风险贡献" in at.info[0].value
+    assert set(at.dataframe[0].value["ES 贡献"]) == {"—"}
 
 
 def test_database_from_an_older_version_says_how_to_upgrade(world):

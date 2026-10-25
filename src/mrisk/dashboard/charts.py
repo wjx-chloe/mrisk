@@ -59,6 +59,29 @@ def hbar(labels, values, title: str, x_fmt: str = ".1%", color: str = SERIES[0],
     return _layout(fig, title, height=max(240, 32 * len(labels) + 80))
 
 
+def hbar_pair(labels, a, b, names: tuple[str, str], title: str, x_fmt: str = ".1%", highlight=None) -> go.Figure:
+    """Two measures side by side per label (grouped horizontal bars, first label on top): slot 1 for a, slot 2 for b,
+    same units on one axis. highlight fades the other labels' bars, as in hbar."""
+    labels = list(labels)
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    fig = go.Figure()
+    for i, (v, name) in enumerate(zip((a, b), names)):
+        fig.add_trace(go.Bar(
+            y=labels, x=v, name=name, orientation="h",
+            marker={"color": SERIES[i], "cornerradius": 3, "opacity": _emphasis(labels, highlight)},
+            texttemplate="%{x:" + x_fmt + "}", textposition="outside", cliponaxis=False,
+            hovertemplate="%{y}: %{x:" + x_fmt + "}<extra>" + name + "</extra>",
+        ))
+    fig.update_layout(barmode="group", bargap=0.25, bargroupgap=0.05)
+    fig.update_yaxes(autorange="reversed")
+    both = np.concatenate([a, b])
+    both = both[np.isfinite(both)]
+    lo, hi = min(0.0, float(both.min(initial=0.0))), max(0.0, float(both.max(initial=0.0)))
+    pad = 0.18 * (hi - lo or 1.0)
+    fig.update_xaxes(tickformat=x_fmt, range=[lo - (pad if lo < 0 else 0), hi + (pad if hi > 0 else 0)])
+    return _layout(fig, title, height=max(280, 52 * len(labels) + 100))
+
+
 def backtest(obs: pd.DataFrame, var_col: str, title: str) -> go.Figure:
     """Daily hypothetical P&L (bars) against -VaR (line); exceptions (pnl < -VaR) marked and named in the legend."""
     x = obs["pnl_date"]
