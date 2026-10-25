@@ -18,7 +18,7 @@ import pandas as pd
 from scipy.stats import norm
 
 from mrisk.engine.returns import returns_window
-from mrisk.engine.var import hs_es, hs_var, param_var
+from mrisk.engine.var import hs_es, hs_es_components, hs_var, hs_var_components, param_var
 
 METRICS = ("var_hs", "var_param", "es_hs")
 FACTOR_TOL = 1e-9  # same tolerance as DQ05 for "the adjustment factor did not change"
@@ -34,7 +34,6 @@ def risk_components(R: np.ndarray, e: np.ndarray, confidence) -> tuple[dict, dic
     R = np.asarray(R, dtype=float)
     e = np.asarray(e, dtype=float)
     conf = np.atleast_1d(np.asarray(confidence, dtype=float))
-    T = R.shape[0]
     port = R @ e  # (T,)
     E = e[:, None]
     var = hs_var(port[:, None], conf)[:, 0]
@@ -42,16 +41,8 @@ def risk_components(R: np.ndarray, e: np.ndarray, confidence) -> tuple[dict, dic
     totals = {"var_hs": var, "es_hs": es[:, 0], "var_param": param_var(R, E, conf)[:, 0]}
 
     contrib = R * e[None, :]  # (T, N) per-name P&L scenarios
-    order = np.argsort(port, kind="stable")
-    h = (1.0 - conf) * (T - 1)
-    lo = np.floor(h).astype(int)
-    lam = h - lo
-    hi = np.minimum(lo + 1, T - 1)
-    c_var = -((1 - lam)[:, None] * contrib[order[lo]] + lam[:, None] * contrib[order[hi]])
-
-    tail = port[None, :] < -var[:, None]  # (C, T)
-    n = tail.sum(axis=1)
-    c_es = np.where(n[:, None] > 0, -(tail.astype(float) @ contrib) / np.maximum(n, 1)[:, None], c_var)
+    c_var = hs_var_components(contrib, port, conf)
+    c_es = hs_es_components(contrib, port, var, conf)
 
     cov = np.atleast_2d(np.cov(R, rowvar=False, ddof=1))
     se = cov @ e

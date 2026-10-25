@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from mrisk.engine.var import hs_es, hs_var, param_sigma, param_var
+from mrisk.engine.var import hs_es, hs_es_components, hs_var, hs_var_components, param_sigma, param_var
 
 # T = 10 P&L observations; sorted: -80, -50, -35, -20, -10, 5, 10, 20, 30, 40
 PNL = np.array([-50.0, 30.0, -20.0, 10.0, -80.0, 40.0, -10.0, 5.0, 20.0, -35.0])[:, None]
@@ -117,3 +117,70 @@ def test_rejects_shape_mismatch():
         param_sigma(np.zeros((5, 3)), np.zeros((2, 1)))
     with pytest.raises(ValueError, match="2-D"):
         hs_var(np.zeros(5), [0.99])
+
+
+# ---- Euler components of HS ES ---------------------------------------------------------------------------------
+# the 3-stock P&L of tests/test_risk.py (market value x return), P = A + B + C
+PARTS = np.array([
+    [100, -200, 300, -100, 0, 200, -300, 100, -100, 200],  # A
+    [-110, 110, 220, -220, 110, -110, -440, 220, 0, 110],  # B
+    [180, -90, -270, 90, 180, 0, -180, -90, 270, -180],  # C
+], dtype=float).T
+
+
+def test_es_components_hand_computed():
+    port = PARTS.sum(axis=1)  # 170 -180 250 -230 290 90 -920 230 170 130
+    # c = 0.80: pos 0.2 x 9 = 1.8 -> -230 + 0.8 x (-180 + 230) = -190, VaR 190; tail < -190: day 6 (-920), day 3 (-230)
+    #   ES = (920 + 230) / 2 = 575; A -(-300 - 100) / 2 = 200, B -(-440 - 220) / 2 = 330, C -(-180 + 90) / 2 = 45
+    #   (C gains 90 on day 3, which offsets part of its day-6 loss)
+    # c = 0.95 / 0.99: the tail is day 6 alone -> A 300, B 440, C 180, ES 920
+    conf = [0.80, 0.95, 0.99]
+    var = hs_var(port[:, None], conf)[:, 0]
+    np.testing.assert_allclose(var, [190.0, 609.5, 857.9], atol=1e-10)
+    comp = hs_es_components(PARTS, port, var, conf)
+    np.testing.assert_allclose(comp, [[200.0, 330.0, 45.0], [300.0, 440.0, 180.0], [300.0, 440.0, 180.0]], atol=1e-10)
+    np.testing.assert_allclose(comp.sum(axis=1), hs_es(port[:, None], var[:, None])[0][:, 0], rtol=1e-15)
+
+
+def test_es_component_can_be_negative():
+    # X loses on both tail days, Y gains on both: Y lowers the portfolio ES
+    parts = np.array([[-10.0, 2.0], [-8.0, 1.0], [5.0, -1.0], [3.0, -1.0]])
+    port = parts.sum(axis=1)  # -8 -7 4 2
+    # c = 0.6: pos 0.4 x 3 = 1.2 -> -7 + 0.2 x (2 + 7) = -5.2; tail days 0, 1; ES 7.5 = X 9 + Y -1.5
+    var = hs_var(port[:, None], [0.6])[:, 0]
+    np.testing.assert_allclose(var, [5.2], atol=1e-12)
+    np.testing.assert_allclose(hs_es_components(parts, port, var, [0.6]), [[9.0, -1.5]], atol=1e-12)
+
+
+def test_es_components_empty_tail_are_the_var_components():
+    # the two names offset exactly: the portfolio loses 5 every day, nothing lies strictly beyond VaR = 5, ES = VaR
+    parts = np.array([[-1.0, -4.0], [-2.0, -3.0], [-3.0, -2.0], [-4.0, -1.0]])
+    port = parts.sum(axis=1)
+    var = hs_var(port[:, None], [0.95])[:, 0]
+    es, n = hs_es(port[:, None], var[:, None])
+    assert n[0, 0] == 0 and es[0, 0] == pytest.approx(5.0)
+    # stable order keeps days 0, 1; pos 0.05 x 3 = 0.15 -> -(0.85 x day 0 + 0.15 x day 1): 1.15, 3.85
+    comp = hs_es_components(parts, port, var, [0.95])
+    np.testing.assert_allclose(comp, [[1.15, 3.85]], atol=1e-12)
+    np.testing.assert_array_equal(comp, hs_var_components(parts, port, [0.95]))
+
+
+def test_es_components_sum_to_es_and_scale_with_the_positions():
+    rng = np.random.default_rng(7)
+    parts = rng.standard_t(4, (250, 40)) * rng.uniform(1e4, 1e5, 40)
+    port = parts.sum(axis=1)
+    conf = [0.95, 0.99]
+    var = hs_var(port[:, None], conf)[:, 0]
+    es = hs_es(port[:, None], var[:, None])[0][:, 0]
+    comp = hs_es_components(parts, port, var, conf)
+    np.testing.assert_allclose(comp.sum(axis=1), es, rtol=1e-12)  # the Euler identity
+    lam = 1.37  # homogeneous of degree 1, like ES itself
+    np.testing.assert_allclose(hs_es_components(lam * parts, lam * port, lam * var, conf), lam * comp, rtol=1e-12, atol=1e-12 * es.max())
+
+
+def test_tail_days_at_250():
+    # the tail of linear-interpolated HS ES has floor((1 - c)(T - 1)) + 1 days when no P&L ties:
+    # T = 250 -> 99%: floor(2.49) + 1 = 3, 95%: floor(12.45) + 1 = 13
+    port = np.random.default_rng(3).standard_normal(250)[:, None]
+    var = hs_var(port, [0.99, 0.95])
+    assert hs_es(port, var)[1][:, 0].tolist() == [3, 13]

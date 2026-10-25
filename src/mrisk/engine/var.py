@@ -55,3 +55,33 @@ def param_var(R, E, confidence) -> np.ndarray:
     (T, N), (N, K) -> (C, K)."""
     z = norm.ppf(_confidence(confidence))
     return z[:, None] * param_sigma(R, E)[None, :]
+
+
+def hs_var_components(parts, port, confidence) -> np.ndarray:
+    """Euler allocation of the historical-simulation VaR of `port` to the columns of `parts` (T, K), the P&L of the
+    pieces port is made of (port = parts summed over the pieces): -[(1 - lam) parts[d_lo] + lam parts[d_hi]] on the
+    two scenario days the linear quantile interpolates. (T, K), (T,) -> (C, K)."""
+    parts = _matrix(parts, "parts")
+    port = np.asarray(port, dtype=float)
+    conf = _confidence(confidence)
+    T = port.shape[0]
+    order = np.argsort(port, kind="stable")
+    h = (1.0 - conf) * (T - 1)
+    lo = np.floor(h).astype(int)
+    lam = h - lo
+    hi = np.minimum(lo + 1, T - 1)
+    return -((1 - lam)[:, None] * parts[order[lo]] + lam[:, None] * parts[order[hi]])
+
+
+def hs_es_components(parts, port, var, confidence) -> np.ndarray:
+    """Euler allocation of the historical-simulation ES of `port` to the columns of `parts`: minus the mean of each
+    column over the tail days of port (port < -VaR, the days hs_es averages), so the pieces of port sum to its ES.
+    A piece can contribute a negative amount (it gains on the tail days on average). With no day strictly beyond VaR,
+    ES = VaR and the VaR components are returned. (T, K), (T,), (C,) -> (C, K)."""
+    parts = _matrix(parts, "parts")
+    port = np.asarray(port, dtype=float)
+    var = np.asarray(var, dtype=float)
+    tail = port[None, :] < -var[:, None]  # (C, T)
+    n = tail.sum(axis=1)
+    return np.where(n[:, None] > 0, -(tail.astype(float) @ parts) / np.maximum(n, 1)[:, None],
+                    hs_var_components(parts, port, confidence))
