@@ -1,7 +1,7 @@
 [project]
 name = "mrisk"
 version = "0.1.0"
-description = "Add your description here"
+description = "面向 A 股股票组合的市场风险管理系统：VaR/ES 计量、回测验证、压力测试、风险归因与限额监控，支持基于离线行情快照的可复现演示"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
