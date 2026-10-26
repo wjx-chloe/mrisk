@@ -7,7 +7,7 @@
 | 项 | 做了什么 | 主要文件 |
 |---|---|---|
 | a. 数据状态 | 总览页顶部一行：行情截至、持仓截至、数据来源、VaR / ES 门禁、当日 DQ | `dashboard/queries.py` 的 `data_status`、`views/overview.py` |
-| b. 页面跳转 | 总览页每条限额规则一条链接，带着日期、置信度和焦点跳到解释它的页面 | `dashboard/transforms.py` 的 `limit_target`、`dashboard/common.py`、`app.py`、各页面 |
+| b. 页面跳转 | 总览页和限额页的每条限额规则一条链接，带着日期、置信度和焦点跳到解释它的页面 | `dashboard/transforms.py` 的 `limit_target`、`dashboard/common.py` 的 `limit_links`、`app.py`、各页面 |
 | c. ES 风险贡献 | 历史模拟 ES 的 Euler 分解，由风险任务计算后存进 `risk_result.es_hs_contrib`；敞口页与市值占比并排 | `engine/var.py`、`engine/risk.py`、`views/exposure.py` |
 | c'. 旧库升级 | 缺少新列的库就地 `ALTER TABLE` 补列，只补算这一列；`mrisk upgrade-db` | `db/repo.py`、`jobs/risk.py` 的 `fill_es_contrib`、`cli.py` |
 
@@ -32,6 +32,8 @@ SPEC 改了三处：§3.6（`risk_result` 加 `es_hs_contrib` 一行，与代码
 ## 3. 页面跳转
 
 ### 3.1 方案：page_link 加 query params
+
+链接画在总览页的限额表和限额页的规则表下面，两处调用同一个 `limit_links`，链接完全一致（有测试）。
 
 `st.page_link(page, query_params=...)` 负责跳转，query params 负责带上下文。
 
@@ -189,7 +191,7 @@ uv run mrisk diff-db data/mrisk.db data/demo.db  # 期望 17 张表全部 identi
 
 ## 6. 怎么验证的
 
-`uv run pytest`：272 个通过（第 4 周结束时 251 个，本轮新增 21 个），另有 3 个 slow 回归测试在新 demo 库上通过。
+`uv run pytest`：273 个通过（第 4 周结束时 251 个，本轮新增 22 个），另有 3 个 slow 回归测试在新 demo 库上通过。
 
 - **引擎（手算）**，`tests/test_var.py`：
   - 3 只股票、10 天：
@@ -219,7 +221,7 @@ uv run mrisk diff-db data/mrisk.db data/demo.db  # 期望 17 张表全部 identi
     - `exposure` 的贡献等于库里存的值，两层占比之和为 1。
   - 页面（AppTest，能读到 `page_link` 的 `query_string` 和 `query_params`）：
     - 总览的数据状态行；
-    - 每条规则的链接与 `limit_target` 一致；
+    - 每条规则的链接与 `limit_target` 一致；限额页的链接与总览页完全相同（95% 下也是）；
     - 带参数打开敞口、归因、压测三页，都落在对应的上下文上。压测选的是排名最后的情景，不是默认值，这样才证明参数被采纳了；
     - 跳转后改单选，不会被 URL 改回，并丢掉 `from`；改侧边栏日期，丢掉 `ind`；
     - 无效参数回落到默认值；
@@ -234,4 +236,4 @@ uv run mrisk diff-db data/mrisk.db data/demo.db  # 期望 17 张表全部 identi
 2. **99% 提示的措辞**：最初的原文是"贡献随单日剧烈变化"，但 §4.4 的数据显示，99% 的不稳定是偶发的大跳变（日换手超过 10% 的有 6 天，最大 22%），平常日子与 95% 相近（中位数 0.9% 对 1.0%）。验收时改为按数据的说法（§4.2）："平常日子与 95% 相近，但极端日移入或移出窗口时，贡献会一次性大幅跳动。稳定的读数以 95% 为准。"测试按全文核对。
 3. **自动补算的时机**：每条写库命令都会检查有没有 NULL 的贡献。一次全量补算约 20 秒；有补不上的日期时，每条命令都会重试并记一次日志，直到对该日重跑 `mrisk risk`。
 4. **SPEC**：§3.6、§5.2 第 8 步、§7 都已同步（§1）。
-5. **跳转上下文只在总览出发**：限额页的规则表还没有同样的链接。`limit_target` 是纯函数，接上只需几行。
+5. **跳转链接**：总览页和限额页都有（验收时补上限额页）。SPEC §7 只写了总览页的跳转，限额页那一行没有改。

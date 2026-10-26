@@ -3,7 +3,7 @@ import streamlit as st
 
 from mrisk.dashboard import charts
 from mrisk.dashboard import queries as q
-from mrisk.dashboard.common import LIMIT_LABEL, ctx, pct, status_dataframe
+from mrisk.dashboard.common import LIMIT_LABEL, ctx, limit_links, pct, status_dataframe
 
 c = ctx()
 st.header(f"限额 · {c.date:%Y-%m-%d}")
@@ -35,6 +35,8 @@ table = pd.DataFrame({
     "status": lim["status"],
 })
 status_dataframe(table)
+st.markdown("**带上下文跳转**")
+limit_links(c, lim)
 for r in lim.itertuples():
     det = r.detail if isinstance(r.detail, dict) else None
     if det and det.get("members"):
