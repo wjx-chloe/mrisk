@@ -22,7 +22,8 @@ T = c.cfg["lookback_days"]
 n_tail = tf.tail_days(c.conf, T)
 widest = min(c.cfg["confidence"])  # the confidence with the most tail days
 if c.conf != widest:
-    st.warning(f"尾部仅约 {n_tail} 个场景，贡献随单日剧烈变化，建议以 {conf_label(widest)}（尾部约 {tf.tail_days(widest, T)} 天）为准。", icon="⚠️")
+    st.warning(f"尾部仅约 {n_tail} 个场景；平常日子与 {conf_label(widest)} 相近，但极端日移入或移出窗口时，贡献会一次性大幅跳动。"
+               f"稳定的读数以 {conf_label(widest)}（尾部约 {tf.tail_days(widest, T)} 天）为准。", icon="⚠️")
 has_contrib = inst["es_contrib"].notna().all()
 if not has_contrib:
     st.info("该日没有 ES 风险贡献：升级旧库时，库里存的风险数与重算结果不一致，没有补算（见 `mrisk upgrade-db` 的日志）。"
