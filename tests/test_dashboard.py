@@ -524,7 +524,9 @@ def test_exposure_page_shows_es_contribution_beside_the_weight_and_warns_at_99(w
     d = q.complete_dates(engine, cfg)[-1]
     T = cfg["lookback_days"]
     at = _app("exposure", 0.99)
-    assert f"尾部仅约 {tf.tail_days(0.99, T)} 个场景，贡献随单日剧烈变化，建议以 95%（尾部约 {tf.tail_days(0.95, T)} 天）为准" in at.warning[0].value
+    assert at.warning[0].value == (
+        f"尾部仅约 {tf.tail_days(0.99, T)} 个场景；平常日子与 95% 相近，但极端日移入或移出窗口时，贡献会一次性大幅跳动。"
+        f"稳定的读数以 95%（尾部约 {tf.tail_days(0.95, T)} 天）为准。")
     top = at.dataframe[0].value.set_index("代码")
     _, inst = q.exposure(engine, _pid(cfg), d, 0.99)
     for r in inst.head(10).itertuples():
