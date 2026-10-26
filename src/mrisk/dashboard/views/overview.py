@@ -2,8 +2,7 @@ import pandas as pd
 import streamlit as st
 
 from mrisk.dashboard import queries as q
-from mrisk.dashboard import transforms as tf
-from mrisk.dashboard.common import GATE_LABEL, LIMIT_LABEL, conf_label, ctx, pct, status_dataframe, wan
+from mrisk.dashboard.common import GATE_LABEL, LIMIT_LABEL, conf_label, ctx, limit_links, pct, status_dataframe, wan
 
 c = ctx()
 st.header(f"总览 · {c.date:%Y-%m-%d}")
@@ -72,25 +71,4 @@ counts = lim["status"].value_counts()
 st.caption(" · ".join(f"{LIMIT_LABEL[k]} {counts.get(k, 0)}" for k in ("breach", "warn", "ok", "no_data")))
 
 st.markdown("**带上下文跳转**")
-ind_mv, inst_mv = q.exposure(c.engine, c.pid, c.date, c.conf)  # largest first
-largest = {"inst": inst_mv["instrument_id"].iloc[0] if len(inst_mv) else None, "ind": ind_mv["industry"].iloc[0] if len(ind_mv) else None}
-stock_name = inst_mv.set_index("instrument_id")["name"]
-PAGE_TITLE = {"exposure": "敞口", "attribution": "归因", "stress": "压力测试"}
-METRIC_TITLE = {"var_hs": "VaR 历史模拟", "var_param": "VaR 参数法", "es_hs": "ES 历史模拟"}
-for r in lim.itertuples():
-    kind = "inst" if r.metric == "concentration_instrument" else "ind"
-    target = tf.limit_target(r.rule_id, r.metric, r.scope, r.detail, largest[kind])
-    if target is None:
-        st.caption(f"{r.rule_id}：指标 {r.metric} 没有对应的说明页面")
-        continue
-    page, params = target
-    if "inst" in params:
-        what = "高亮 " + "、".join(f"{k} {stock_name.get(k, '')}".strip() for k in params["inst"].split(","))
-    elif "ind" in params:
-        what = "高亮 " + params["ind"].replace(",", "、")
-    elif "metric" in params:
-        what = f"{METRIC_TITLE[params['metric']]} {conf_label(float(params['conf']))}"
-    else:
-        what = f"选中情景 {params['scenario']}"
-    st.page_link(f"views/{page}.py", label=f"{r.rule_id}（{LIMIT_LABEL[r.status]}）→ {PAGE_TITLE[page]} · {what}", icon="↪️",
-                 query_params={"date": f"{c.date:%Y-%m-%d}", "conf": f"{c.conf:g}", **params})
+limit_links(c, lim)

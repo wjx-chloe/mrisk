@@ -6,6 +6,9 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy import Engine
 
+from mrisk.dashboard import queries as q
+from mrisk.dashboard import transforms as tf
+
 # status always shown with an icon and a word, never colour alone
 LIMIT_LABEL = {"breach": "🔴 突破", "warn": "🟡 预警", "ok": "🟢 正常", "no_data": "⚪ 无数据"}
 ZONE_LABEL = {"green": "🟢 绿", "yellow": "🟡 黄", "red": "🔴 红"}
@@ -77,7 +80,7 @@ def jumped_from(page: str, where=None) -> None:
     the page, filled after the page's widgets have written their params) or inline."""
     rid = st.query_params.get("from")
     if rid:
-        (where or st).info(f"从总览限额 **{rid}** 跳转到{page}。", icon="↪️")
+        (where or st).info(f"从限额规则 **{rid}** 跳转到{page}。", icon="↪️")
 
 
 def wan(x: float) -> str:
@@ -105,3 +108,33 @@ def status_dataframe(df: pd.DataFrame, col: str = "status") -> None:
     """st.dataframe with highlight_status rows; the raw status column drives the colours but is not shown.
     column_order hides it: st.dataframe ignores Styler.hide."""
     st.dataframe(highlight_status(df, col), hide_index=True, width="stretch", column_order=[c for c in df.columns if c != col])
+
+
+PAGE_TITLE = {"exposure": "敞口", "attribution": "归因", "stress": "压力测试"}
+METRIC_TITLE = {"var_hs": "VaR 历史模拟", "var_param": "VaR 参数法", "es_hs": "ES 历史模拟"}
+
+
+def limit_links(c: Ctx, lim: pd.DataFrame) -> None:
+    """One page_link per limit check of the day (limits_today rows), to the page tf.limit_target names, carrying the
+    date, the confidence and the focus. The overview and the limits page show the same links."""
+    ind_mv, inst_mv = q.exposure(c.engine, c.pid, c.date, c.conf)  # largest first
+    largest = {"inst": inst_mv["instrument_id"].iloc[0] if len(inst_mv) else None,
+               "ind": ind_mv["industry"].iloc[0] if len(ind_mv) else None}
+    stock_name = inst_mv.set_index("instrument_id")["name"]
+    for r in lim.itertuples():
+        kind = "inst" if r.metric == "concentration_instrument" else "ind"
+        target = tf.limit_target(r.rule_id, r.metric, r.scope, r.detail, largest[kind])
+        if target is None:
+            st.caption(f"{r.rule_id}：指标 {r.metric} 没有对应的说明页面")
+            continue
+        page, params = target
+        if "inst" in params:
+            what = "高亮 " + "、".join(f"{k} {stock_name.get(k, '')}".strip() for k in params["inst"].split(","))
+        elif "ind" in params:
+            what = "高亮 " + params["ind"].replace(",", "、")
+        elif "metric" in params:
+            what = f"{METRIC_TITLE[params['metric']]} {conf_label(float(params['conf']))}"
+        else:
+            what = f"选中情景 {params['scenario']}"
+        st.page_link(f"views/{page}.py", label=f"{r.rule_id}（{LIMIT_LABEL[r.status]}）→ {PAGE_TITLE[page]} · {what}", icon="↪️",
+                     query_params={"date": f"{c.date:%Y-%m-%d}", "conf": f"{c.conf:g}", **params})

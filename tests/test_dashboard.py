@@ -431,6 +431,17 @@ def test_overview_links_every_limit_to_its_page_with_context(world):
     assert links["L_VAR99"].page == "attribution" and links["L_STRESS_B"].page == "stress"
 
 
+def test_limits_page_links_the_same_as_the_overview(world):
+    def links(at):
+        return {(x.proto.label, x.proto.page, x.proto.query_string) for x in at.get("page_link")}
+
+    engine, cfg = world
+    over = links(_app())
+    assert len(over) == len(q.active_rules(engine, _pid(cfg)))  # one link per rule
+    assert links(_app("limits")) == over
+    assert links(_app("limits", 0.95)) == links(_app(conf=0.95))  # the confidence travels the same way on both pages
+
+
 def test_limit_links_land_with_their_context(world):
     engine, cfg = world
     complete = q.complete_dates(engine, cfg)
@@ -439,7 +450,7 @@ def test_limit_links_land_with_their_context(world):
     name = inst["instrument_id"].iloc[3]
     at = _app_at("exposure", date=f"{d:%Y-%m-%d}", conf="0.95", **{"from": "L_CONC_INST", "inst": name})
     assert at.sidebar.selectbox(key="date").value == d and at.sidebar.radio(key="conf").value == 0.95
-    assert "L_CONC_INST" in at.info[0].value
+    assert at.info[0].value.startswith("从限额规则 **L_CONC_INST** 跳转到敞口页")  # the same words from the overview or the limits page
     assert any(c.value.startswith("高亮个股：") and name in c.value for c in at.caption)
     at = _app_at("attribution", date=f"{d:%Y-%m-%d}", conf="0.99", **{"from": "L_ES99", "metric": "es_hs"})
     assert at.radio(key="attr_metric").value == "es_hs" and at.sidebar.radio(key="conf").value == 0.99
